@@ -1,0 +1,145 @@
+{
+  "name": "CDC_K8s_Flow",
+  "nodes": [
+    {
+      "parameters": {
+        "topic": "k8s-resources",
+        "groupId": "n8n-cdc-consumer",
+        "options": {
+          "allowAutoTopicCreation": false,
+          "autoOffsetReset": "earliest"
+        }
+      },
+      "id": "kafka-trigger",
+      "name": "Kafka Trigger",
+      "type": "n8n-nodes-base.kafkaTrigger",
+      "typeVersion": 1,
+      "position": [200, 300],
+      "credentials": {
+        "kafka": {
+          "id": "kafka-local",
+          "name": "Kafka Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// The Kafka trigger delivers the raw message string in .message\nconst raw = $input.first().json;\nlet data;\ntry {\n  data = typeof raw.message === 'string' ? JSON.parse(raw.message) : raw;\n} catch (_) {\n  data = raw;\n}\n\n// Use embed_text from watcher if present; build one otherwise\nlet embed_text = data.embed_text;\nif (!embed_text) {\n  const ns = data.namespace || 'cluster-scoped';\n  const scope = data.namespace ? `in namespace ${data.namespace}` : 'cluster-scoped';\n  const labels = Object.entries(data.labels || {}).slice(0,5).map(([k,v])=>`${k}=${v}`).join(', ') || 'none';\n  embed_text = `Kubernetes ${data.kind} named ${data.name} ${scope}. Labels: ${labels}. Spec: ${(data.raw_spec_json||'{}').substring(0,600)}`;\n}\n\nreturn [{ json: { ...data, embed_text } }];"
+      },
+      "id": "parse-message",
+      "name": "Parse Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://qdrant:6333/collections/k8s/points/delete",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ points: [$('Parse Message').first().json.resource_uid] }) }}",
+        "options": {}
+      },
+      "id": "delete-vector",
+      "name": "Delete Existing Vector",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "is-delete-check",
+              "leftValue": "={{ $('Parse Message').first().json.event_type }}",
+              "rightValue": "DELETED",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "is-delete",
+      "name": "Is Delete Event?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [860, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:11434/api/embed",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'nomic-embed-text', input: $('Parse Message').first().json.embed_text }) }}",
+        "options": {}
+      },
+      "id": "generate-embedding",
+      "name": "Generate Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1080, 420]
+    },
+    {
+      "parameters": {
+        "jsCode": "const embedding = $input.first().json.embeddings[0];\nconst src = $('Parse Message').first().json;\n\nreturn [{\n  json: {\n    points: [{\n      id: src.resource_uid,\n      vector: embedding,\n      payload: {\n        resource_uid: src.resource_uid,\n        kind:          src.kind,\n        api_version:   src.api_version,\n        namespace:     src.namespace,\n        name:          src.name,\n        labels:        src.labels,\n        annotations:   src.annotations,\n        raw_spec_json: src.raw_spec_json,\n        last_updated_timestamp: src.last_updated_timestamp\n      }\n    }]\n  }\n}];"
+      },
+      "id": "build-point",
+      "name": "Build Qdrant Point",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 420]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "http://qdrant:6333/collections/k8s/points",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "insert-vector",
+      "name": "Insert Vector",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1520, 420]
+    }
+  ],
+  "connections": {
+    "Kafka Trigger": {
+      "main": [[{ "node": "Parse Message", "type": "main", "index": 0 }]]
+    },
+    "Parse Message": {
+      "main": [[{ "node": "Delete Existing Vector", "type": "main", "index": 0 }]]
+    },
+    "Delete Existing Vector": {
+      "main": [[{ "node": "Is Delete Event?", "type": "main", "index": 0 }]]
+    },
+    "Is Delete Event?": {
+      "main": [
+        [],
+        [{ "node": "Generate Embedding", "type": "main", "index": 0 }]
+      ]
+    },
+    "Generate Embedding": {
+      "main": [[{ "node": "Build Qdrant Point", "type": "main", "index": 0 }]]
+    },
+    "Build Qdrant Point": {
+      "main": [[{ "node": "Insert Vector", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

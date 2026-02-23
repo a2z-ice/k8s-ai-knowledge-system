@@ -1,0 +1,85 @@
+{
+  "name": "Reset_K8s_Flow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "k8s-reset",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "reset-webhook",
+      "name": "Reset Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [180, 300],
+      "webhookId": "k8s-reset"
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "http://qdrant:6333/collections/k8s",
+        "options": {}
+      },
+      "id": "delete-collection",
+      "name": "Delete Qdrant Collection",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "http://qdrant:6333/collections/k8s",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ \"vectors\": { \"size\": 768, \"distance\": \"Cosine\" }, \"optimizers_config\": { \"default_segment_number\": 2 }, \"replication_factor\": 1 }",
+        "options": {}
+      },
+      "id": "recreate-collection",
+      "name": "Recreate Qdrant Collection",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [620, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://k8s-watcher:8080/resync",
+        "options": {}
+      },
+      "id": "trigger-resync",
+      "name": "Trigger Resync",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [840, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ts = new Date().toISOString();\nreturn [{ json: { status: 'ok', message: 'Qdrant collection cleared and k8s-watcher resync triggered. Vector database will repopulate within ~30 seconds.', reset_at: ts } }];"
+      },
+      "id": "format-reset-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1060, 300]
+    }
+  ],
+  "connections": {
+    "Reset Webhook": {
+      "main": [[{ "node": "Delete Qdrant Collection", "type": "main", "index": 0 }]]
+    },
+    "Delete Qdrant Collection": {
+      "main": [[{ "node": "Recreate Qdrant Collection", "type": "main", "index": 0 }]]
+    },
+    "Recreate Qdrant Collection": {
+      "main": [[{ "node": "Trigger Resync", "type": "main", "index": 0 }]]
+    },
+    "Trigger Resync": {
+      "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
