@@ -37,13 +37,19 @@ K8S_SERVER = os.getenv("K8S_SERVER", "")
 
 
 def load_k8s():
-    cfg = client.Configuration()
-    config.load_kube_config(config_file=KUBECONFIG, client_configuration=cfg)
-    if K8S_SERVER:
-        cfg.host = K8S_SERVER
-        cfg.verify_ssl = False  # cert is bound to 127.0.0.1, not the override host
-    client.Configuration.set_default(cfg)
-    log.info("K8s client configured — server: %s", cfg.host)
+    if os.getenv("KUBERNETES_SERVICE_HOST"):
+        # In-cluster: use mounted ServiceAccount token (no kubeconfig needed)
+        config.load_incluster_config()
+        log.info("K8s client configured — in-cluster (ServiceAccount token)")
+    else:
+        # Out-of-cluster (Docker Compose / local dev): fall back to kubeconfig
+        cfg = client.Configuration()
+        config.load_kube_config(config_file=KUBECONFIG, client_configuration=cfg)
+        if K8S_SERVER:
+            cfg.host = K8S_SERVER
+            cfg.verify_ssl = False  # cert is bound to 127.0.0.1, not the override host
+        client.Configuration.set_default(cfg)
+        log.info("K8s client configured — server: %s", cfg.host)
 
 
 def make_producer() -> KafkaProducer:

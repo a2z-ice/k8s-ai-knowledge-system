@@ -9,8 +9,8 @@ Project-specific slash commands are in `.claude/commands/`. Use them to quickly 
 | Command | Purpose |
 |---------|---------|
 | `/resume` | Read project state and print a session-start brief with what's built, system health, and next steps |
-| `/status` | Full health check — Docker, Qdrant, Kafka, k8s-watcher, Ollama, kind, n8n workflows, webhooks |
-| `/start-services` | Start Docker Compose services and verify all components are healthy |
+| `/status` | Full health check — k8s pods, Qdrant, Kafka, k8s-watcher, Ollama, kind, n8n workflows, webhooks |
+| `/start-services` | Apply k8s manifests and verify all components are healthy |
 | `/reset-db` | Wipe Qdrant vector DB and trigger CDC resync via `/webhook/k8s-reset` |
 | `/reimport-workflows` | Reimport + reactivate all 3 n8n workflows from local JSON files |
 | `/test` | Run all 5 E2E tests (`npm test`) with prerequisite checks and failure diagnosis |
@@ -25,7 +25,8 @@ All plans are stored in `docs/plans/` with an incrementing index prefix:
 ```
 docs/plans/
   1. Kubernetes AI Knowledge System.md
-  2. <next plan title>.md
+  2. Kubernetes In-Cluster Migration.md
+  3. <next plan title>.md
 ```
 
 When starting a new significant piece of work, create the next numbered plan file before implementing.
@@ -36,7 +37,7 @@ When starting a new significant piece of work, create the next numbered plan fil
 
 ```
 kind_vector_n8n/
-├── docker-compose.yml               # 5 Docker services (n8n, qdrant, kafka, debezium, k8s-watcher)
+├── docker-compose.yml               # Legacy/local-dev reference (4 services; Debezium removed)
 ├── package.json                     # npm scripts: test, test:single, screenshots
 │
 ├── docs/
@@ -51,8 +52,16 @@ kind_vector_n8n/
 │   └── n8n_reset_k8s_flow.json      # Reset: wipe Qdrant + trigger CDC resync
 │
 ├── infra/
+│   ├── kind-config.yaml             # kind cluster config (extraPortMappings + extraMounts)
 │   ├── schemas/qdrant_k8s_collection_schema.json
-│   └── connectors/debezium_k8s_connector.json
+│   ├── connectors/debezium_k8s_connector.json  # kept for reference only
+│   └── k8s/                         # Kubernetes manifests
+│       ├── 00-namespace.yaml
+│       ├── 01-pvs.yaml              # 3 hostPath PVs (n8n, qdrant, kafka)
+│       ├── kafka/                   # kafka-pvc, kafka-service, kafka-statefulset
+│       ├── qdrant/                  # qdrant-pvc, qdrant-deployment, qdrant-service
+│       ├── k8s-watcher/             # k8s-watcher-rbac, k8s-watcher-deployment
+│       └── n8n/                     # n8n-pvc, n8n-deployment, n8n-service
 │
 ├── k8s-watcher/                     # Python service: K8s API → Kafka publisher
 │   ├── watcher.py
@@ -71,24 +80,46 @@ kind_vector_n8n/
 │       └── activate_n8n_playwright.config.ts
 │
 ├── scripts/
-│   ├── n8n-setup.sh                 # One-time n8n Kafka credential + workflow import
+│   ├── setup.sh                     # Full from-scratch setup (cluster + pods + workflows + tests)
+│   ├── cleanup.sh                   # Tear down cluster and images (optionally wipe data/)
+│   ├── n8n-setup.sh                 # Legacy: one-time Kafka credential import (superseded by setup.sh)
 │   ├── capture-screenshots.ts       # Playwright script that generates docs/screenshots/
 │   └── screenshot.config.ts         # Playwright config for screenshot script
 │
-└── data/                            # Bind-mount volumes (persisted on host)
+└── data/                            # Host volumes mounted into kind node via extraMounts
     ├── n8n/
     ├── qdrant/
-    ├── kafka/
-    └── debezium/
+    └── kafka/
 ```
 
 ---
 
 ## Commands
 
-### Start all services
+### Full from-scratch setup (recommended)
 ```bash
-docker compose -f docker-compose.yml up -d
+./scripts/setup.sh               # create cluster + deploy all pods + import workflows + npm test
+./scripts/setup.sh --keep-cluster  # reuse existing cluster; re-import workflows + run tests
+./scripts/setup.sh --no-test     # full setup but skip the final npm test run
+```
+
+`setup.sh` handles: prerequisites check, kind cluster creation, manifest apply, docker build + kind load for k8s-watcher, Qdrant collection creation, n8n workflow import (deduplication via sqlite3), Kafka credential creation, workflow activation, and E2E test run.
+
+### Tear down everything
+```bash
+./scripts/cleanup.sh             # delete kind cluster + k8s-watcher image (preserves ./data/)
+./scripts/cleanup.sh --wipe-data # also permanently delete ./data/ subdirs
+./scripts/cleanup.sh --yes       # skip confirmation prompt
+```
+
+### Deploy all services to the kind cluster
+```bash
+kubectl --context kind-k8s-ai apply -f infra/k8s/00-namespace.yaml
+kubectl --context kind-k8s-ai apply -f infra/k8s/01-pvs.yaml
+kubectl --context kind-k8s-ai apply -f infra/k8s/kafka/
+kubectl --context kind-k8s-ai apply -f infra/k8s/qdrant/
+kubectl --context kind-k8s-ai apply -f infra/k8s/k8s-watcher/
+kubectl --context kind-k8s-ai apply -f infra/k8s/n8n/
 ```
 
 ### Install test dependencies (first time only)
@@ -103,6 +134,8 @@ npm test                           # all 5 tests
 npm run test:single "create namespace"   # single test by name
 ```
 
+**E2E test design:** Tests 1–4 simulate CDC processing inline (embed + upsert directly to Qdrant) — they do NOT depend on n8n workflows being active. Test 5 (`Reset`) does require the n8n reset webhook. If tests 1–4 pass but test 5 fails with 404, run `/reimport-workflows`.
+
 ### Capture UI screenshots
 ```bash
 N8N_EMAIL=you@example.com N8N_PASS=yourpassword npm run screenshots
@@ -110,36 +143,53 @@ N8N_EMAIL=you@example.com N8N_PASS=yourpassword npm run screenshots
 ```
 
 ### Reimport and reactivate workflows (after editing workflow JSON)
+
+The safest method is to run `./scripts/setup.sh --keep-cluster` — it handles deduplication and ID discovery automatically.
+
+For a manual reimport (when the cluster is already running):
 ```bash
-docker cp workflows/n8n_cdc_k8s_flow.json   kind_vector_n8n-n8n-1:/tmp/
-docker cp workflows/n8n_ai_k8s_flow.json    kind_vector_n8n-n8n-1:/tmp/
-docker cp workflows/n8n_reset_k8s_flow.json kind_vector_n8n-n8n-1:/tmp/
-docker exec kind_vector_n8n-n8n-1 n8n import:workflow --input=/tmp/n8n_cdc_k8s_flow.json
-docker exec kind_vector_n8n-n8n-1 n8n import:workflow --input=/tmp/n8n_ai_k8s_flow.json
-docker exec kind_vector_n8n-n8n-1 n8n import:workflow --input=/tmp/n8n_reset_k8s_flow.json
-# If IDs changed after re-import, discover them: docker exec kind_vector_n8n-n8n-1 n8n list:workflow
-docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=sLFyTfSNzFIiVC9t
-docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=5cf0evFgopkFXM7q
-docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=JItVx5wVu0WTIvkA
-docker restart kind_vector_n8n-n8n-1
+# Use setup.sh with --keep-cluster --no-test for a clean reimport
+./scripts/setup.sh --keep-cluster --no-test
+
+# Or reimport manually (WARNING: creates duplicate workflows if the old rows are not deleted first)
+N8N_POD=$(kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=n8n -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-k8s-ai -n k8s-ai cp workflows/n8n_cdc_k8s_flow.json   ${N8N_POD}:/tmp/
+kubectl --context kind-k8s-ai -n k8s-ai cp workflows/n8n_ai_k8s_flow.json    ${N8N_POD}:/tmp/
+kubectl --context kind-k8s-ai -n k8s-ai cp workflows/n8n_reset_k8s_flow.json ${N8N_POD}:/tmp/
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_cdc_k8s_flow.json
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_ai_k8s_flow.json
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_reset_k8s_flow.json
+# Discover IDs after import (IDs are generated at import time — they are NOT static):
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n export:workflow --all --output=/tmp/wf.json 2>/dev/null
+kubectl --context kind-k8s-ai -n k8s-ai cp ${N8N_POD}:/tmp/wf.json /tmp/wf.json
+python3 -c "import json; [print(w['name'], '->', w['id']) for w in json.load(open('/tmp/wf.json'))]"
+# Then publish using the discovered IDs:
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=<CDC_ID>
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=<AI_ID>
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=<RESET_ID>
+kubectl --context kind-k8s-ai -n k8s-ai rollout restart deployment/n8n
 ```
 
 ### Create Qdrant collection (first-time setup only)
 ```bash
-curl -X PUT http://localhost:6333/collections/k8s \
+curl -X PUT http://localhost:30001/collections/k8s \
   -H 'Content-Type: application/json' \
   -d @infra/schemas/qdrant_k8s_collection_schema.json
 ```
 
 ### Create kind cluster (first-time setup only)
 ```bash
-kind create cluster --name k8s-ai
-# After creation, find the API server port and update K8S_SERVER in docker-compose.yml:
-kubectl --context kind-k8s-ai cluster-info | grep "control plane"
-# e.g. https://127.0.0.1:PORT → set K8S_SERVER: https://host.docker.internal:PORT
+kind create cluster --config infra/kind-config.yaml
+kubectl --context kind-k8s-ai get nodes   # wait for Ready
 ```
 
-### Pull Ollama models (host machine, not Docker)
+### Build and load k8s-watcher image into kind
+```bash
+docker build -t k8s-watcher:latest ./k8s-watcher/
+kind load docker-image k8s-watcher:latest --name k8s-ai
+```
+
+### Pull Ollama models (host machine only)
 ```bash
 ollama pull nomic-embed-text      # 768-dim embedding model
 ollama pull qwen3:8b              # chat/reasoning model
@@ -185,7 +235,7 @@ POST /webhook/k8s-reset
 
 k8s-watcher watches 9 resource types: Namespace, Pod, Service, ConfigMap, PVC, Deployment, ReplicaSet, StatefulSet, DaemonSet. Each runs in its own thread with auto-restart on error.
 
-k8s-watcher also exposes `GET http://localhost:8085/healthz` → `{"status":"ok"}`
+k8s-watcher also exposes `GET http://localhost:30002/healthz` → `{"status":"ok"}` (NodePort 30002)
 
 ### Qdrant vector schema
 Collection `k8s`, 768-dim Cosine. Point ID = `resource_uid` (UUID from k8s). Payload: `kind`, `namespace`, `name`, `labels`, `annotations`, `raw_spec_json`, `last_updated_timestamp`.
@@ -196,43 +246,64 @@ Collection `k8s`, 768-dim Cosine. Point ID = `resource_uid` (UUID from k8s). Pay
 
 | Item | Value |
 |------|-------|
-| n8n URL | http://localhost:5678 |
+| n8n URL (localhost) | http://localhost:30000 |
+| n8n URL (domain) | http://n8n.genai.prod:30000 (requires `/etc/hosts`: `192.168.1.154 n8n.genai.prod`) |
 | HTTP Basic Auth | admin / admin |
-| Owner email | *(set during first-run n8n owner setup)* |
-| Owner password | *(set during first-run n8n owner setup)* |
-| CDC workflow ID | `sLFyTfSNzFIiVC9t` |
-| AI workflow ID | `5cf0evFgopkFXM7q` |
-| Reset workflow ID | `JItVx5wVu0WTIvkA` |
-| AI public chat URL | http://localhost:5678/webhook/k8s-ai-chat/chat |
-| Reset endpoint | POST http://localhost:5678/webhook/k8s-reset |
-| k8s-watcher health | http://localhost:8085/healthz (host) / http://k8s-watcher:8080/healthz (container) |
+| Owner email | assaduzzaman.ict@gmail.com |
+| Owner password | admin@123Normal |
+| CDC workflow ID | generated at import — discover with `n8n export:workflow --all` |
+| AI workflow ID | generated at import — discover with `n8n export:workflow --all` |
+| Reset workflow ID | generated at import — discover with `n8n export:workflow --all` |
+| AI public chat URL | http://n8n.genai.prod:30000/webhook/k8s-ai-chat/chat |
+| Reset endpoint | POST http://localhost:30000/webhook/k8s-reset |
+| k8s-watcher health | http://localhost:30002/healthz (host) / http://k8s-watcher:8080/healthz (in-cluster) |
+| Qdrant URL | http://localhost:30001 (host) / http://qdrant:6333 (in-cluster) |
 | Kafka topic | `k8s-resources` |
 | Kafka consumer group | `n8n-cdc-consumer` |
 | Qdrant collection | `k8s` |
 | Embedding model | `nomic-embed-text:latest` (768-dim) |
 | Chat model | `qwen3:8b` |
 | kind cluster | `k8s-ai` (context: `kind-k8s-ai`) |
+| k8s namespace | `k8s-ai` |
+
+### NodePort Assignments
+
+| NodePort | Service | Host URL |
+|----------|---------|----------|
+| 30000 | n8n | http://localhost:30000 |
+| 30001 | Qdrant | http://localhost:30001 |
+| 30002 | k8s-watcher | http://localhost:30002/healthz |
 
 ---
 
 ## Constraints
 
-- Kubernetes cluster must be **kind** only.
-- Ollama runs on the **host machine** — never in Docker. All containers reach it via `host.docker.internal:11434`.
+- Kubernetes cluster must be **kind** only. Cluster created with `infra/kind-config.yaml` (required for NodePort mappings and data volume mounts).
+- Ollama runs on the **host machine** — never in a pod. All pods reach it via `host.docker.internal:11434` (mapped via `hostAliases` to `192.168.1.154`).
 - Kafka uses **KRaft mode** (no ZooKeeper).
 - **n8n 2.6.4 known bug:** `N8N_BASIC_AUTH_ACTIVE=true` causes body-parser to reject all POST/PATCH requests to `/rest/*`. Workflow activation must use `n8n publish:workflow` CLI, not the REST API or browser UI.
 - Qdrant score threshold is **0.3** — `nomic-embed-text` scores in the 0.38–0.70 range for k8s metadata. Deployment resources score ~0.43 for deployment-related queries; the previous 0.45 threshold silently filtered them out, causing "No results" LLM responses. 0.3 ensures all resource types are included.
+- `/etc/hosts` entry required on any machine accessing the n8n dashboard by domain: `192.168.1.154 n8n.genai.prod`.
 
 ## Known Operational Patterns
 
-- **Containers stop between sessions** — Docker containers (especially n8n, qdrant, kafka) can stop when the host sleeps or Docker restarts. Always run `docker compose up -d` at the start of a session if anything looks wrong. k8s-watcher has `restart: unless-stopped` and usually survives, but the others do not.
+- **Pods auto-restart** — Deployments have `restartPolicy: Always`. If Docker Desktop restarts, pods come back automatically after ~30s. Check: `kubectl -n k8s-ai get pods`. If pods are missing entirely, re-apply: `kubectl apply -f infra/k8s/`.
+- **k8s-watcher image must be loaded into kind** — The image is `imagePullPolicy: Never`. After any `docker build`, run `kind load docker-image k8s-watcher:latest --name k8s-ai` before rolling out.
 - **Workflow active status** — `n8n list:workflow` does NOT show the active flag. The reliable check is webhook HTTP codes: AI chat (`/webhook/k8s-ai-chat/chat`) and Reset (`/webhook/k8s-reset`) must return 200. If they return 404, workflows are inactive — run `/reimport-workflows`.
 - **Qdrant repopulation after reset** — After `POST /webhook/k8s-reset`, Qdrant is empty for ~30–45 seconds while k8s-watcher republishes all resources. Do not run E2E tests until points_count ≥ 10.
-- **20s startup wait** — After `docker compose up -d`, wait at least 20 seconds before probing Qdrant, Kafka, or n8n endpoints.
+- **30s startup wait** — After applying manifests, wait at least 30 seconds before probing Qdrant, Kafka, or n8n endpoints.
 
 ## Resolved Implementation Decisions
 
-- **k8s-watcher replaces Debezium** — `k8s-watcher/watcher.py` watches the K8s API directly. The original Debezium etcd connector approach was incorrect (etcd is not MongoDB). `infra/connectors/debezium_k8s_connector.json` is kept for reference only. The `debezium` service in docker-compose.yml still runs but is unused.
-- **K8S_SERVER must match kind cluster port** — `docker-compose.yml` has a hardcoded port (`https://host.docker.internal:PORT`). If you recreate the kind cluster, update this to match the new API server port (`kubectl --context kind-k8s-ai cluster-info`).
-- **Debezium image:** `quay.io/debezium/connect:3.0` — Docker Hub `debezium/connect:latest` is deprecated.
+- **k8s-watcher replaces Debezium** — `k8s-watcher/watcher.py` watches the K8s API directly. The original Debezium etcd connector approach was incorrect (etcd is not MongoDB). `infra/connectors/debezium_k8s_connector.json` is kept for reference only.
+- **Debezium removed** — The `debezium` service has been deleted from `docker-compose.yml`. The connector JSON is kept for reference only.
+- **k8s-watcher uses in-cluster config** — `watcher.py` detects `KUBERNETES_SERVICE_HOST` env var (auto-set in every k8s pod) and calls `config.load_incluster_config()`. Falls back to kubeconfig for local dev.
+- **No K8S_SERVER needed** — In-cluster config uses the ServiceAccount token and internal API server address automatically. No `KUBECONFIG` or `K8S_SERVER` env vars needed in the k8s Deployment.
 - **Embedding format:** natural language sentence (`"Kubernetes {kind} named {name} in namespace {ns}. Labels: ..."`) gives significantly better cosine similarity than terse `kind:X name:Y` format.
+- **Static PV binding** — `storageClassName: ""` + `claimRef` pre-binds each PV to its specific PVC, preventing accidental cross-binding.
+- **Kafka `enableServiceLinks: false`** — Kubernetes auto-injects `KAFKA_PORT=tcp://...` into pods from the `kafka` ClusterIP Service. The CP Kafka startup script parses all `KAFKA_*` env vars and chokes on this URL-format value. Fixed by `enableServiceLinks: false` in the StatefulSet pod spec.
+- **Kafka + n8n initContainers** — Both use `busybox` initContainers to `chown -R 1000:1000` their data directories. Docker wrote these as root; both services run as uid 1000 in Kubernetes.
+- **Workflow ID deduplication** — `n8n import:workflow` always creates a new workflow with a fresh ID; it does NOT overwrite by name. `setup.sh` handles this by: (1) scaling n8n to 0 replicas first (safe for sqlite3 ops), (2) deleting workflow_entity rows by name before importing, (3) discovering the newly-created IDs via `n8n export:workflow --all`, and (4) publishing by the discovered IDs. Workflow IDs are **not static** — they change on every fresh import.
+- **n8n SQLite DB safety** — Direct sqlite3 writes MUST be done only when n8n is scaled to 0 replicas. Concurrent writes corrupt the database (`SQLITE_CORRUPT`). Protocol: `scale --replicas=0` → wait for pod termination → sqlite3 ops → `scale --replicas=1`.
+- **n8n credential encryption** — n8n uses OpenSSL-compatible AES-256-CBC (`EVP_BytesToKey` / MD5 key derivation) for credential encryption. Format: `base64("Salted__" + 8-byte-salt + AES-CBC-ciphertext)`. See the Python implementation in `scripts/setup.sh` step 10c. The encryption key lives in `data/n8n/config` (persists across `database.sqlite` deletions).
+- **CDC Kafka `autoOffsetReset: latest`** — The Kafka Trigger in CDC_K8s_Flow uses `autoOffsetReset: latest`. This ensures the CDC consumer only processes messages published after the workflow starts — it does NOT replay historical Kafka messages on each startup. Changing this to `earliest` causes CDC to replay the entire topic history on every n8n restart, filling Qdrant with stale/duplicate points and breaking E2E test 5 (which expects Qdrant to be empty immediately after reset).

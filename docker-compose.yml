@@ -44,23 +44,6 @@ services:
     volumes:
       - ./data/kafka:/var/lib/kafka/data
 
-  debezium:
-    image: quay.io/debezium/connect:3.0
-    ports:
-      - "8083:8083"
-    depends_on:
-      - kafka
-    environment:
-      BOOTSTRAP_SERVERS: kafka:9092
-      GROUP_ID: 1
-      CONFIG_STORAGE_TOPIC: debezium_configs
-      OFFSET_STORAGE_TOPIC: debezium_offsets
-      STATUS_STORAGE_TOPIC: debezium_status
-      CONNECT_REST_ADVERTISED_HOST_NAME: debezium
-      CONNECT_REST_PORT: 8083
-    volumes:
-      - ./data/debezium:/kafka/data
-
   k8s-watcher:
     build:
       context: ./k8s-watcher

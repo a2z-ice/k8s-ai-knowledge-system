@@ -7,14 +7,17 @@
         "groupId": "n8n-cdc-consumer",
         "options": {
           "allowAutoTopicCreation": false,
-          "autoOffsetReset": "earliest"
+          "autoOffsetReset": "latest"
         }
       },
       "id": "kafka-trigger",
       "name": "Kafka Trigger",
       "type": "n8n-nodes-base.kafkaTrigger",
       "typeVersion": 1,
-      "position": [200, 300],
+      "position": [
+        200,
+        300
+      ],
       "credentials": {
         "kafka": {
           "id": "kafka-local",
@@ -30,7 +33,10 @@
       "name": "Parse Message",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [420, 300]
+      "position": [
+        420,
+        300
+      ]
     },
     {
       "parameters": {
@@ -45,7 +51,10 @@
       "name": "Delete Existing Vector",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [640, 300]
+      "position": [
+        640,
+        300
+      ]
     },
     {
       "parameters": {
@@ -73,7 +82,10 @@
       "name": "Is Delete Event?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [860, 300]
+      "position": [
+        860,
+        300
+      ]
     },
     {
       "parameters": {
@@ -88,7 +100,10 @@
       "name": "Generate Embedding",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [1080, 420]
+      "position": [
+        1080,
+        420
+      ]
     },
     {
       "parameters": {
@@ -98,7 +113,10 @@
       "name": "Build Qdrant Point",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1300, 420]
+      "position": [
+        1300,
+        420
+      ]
     },
     {
       "parameters": {
@@ -113,30 +131,79 @@
       "name": "Insert Vector",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [1520, 420]
+      "position": [
+        1520,
+        420
+      ]
     }
   ],
   "connections": {
     "Kafka Trigger": {
-      "main": [[{ "node": "Parse Message", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Parse Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Parse Message": {
-      "main": [[{ "node": "Delete Existing Vector", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Delete Existing Vector",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Delete Existing Vector": {
-      "main": [[{ "node": "Is Delete Event?", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Is Delete Event?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Is Delete Event?": {
       "main": [
         [],
-        [{ "node": "Generate Embedding", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Generate Embedding",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Generate Embedding": {
-      "main": [[{ "node": "Build Qdrant Point", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Build Qdrant Point",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Build Qdrant Point": {
-      "main": [[{ "node": "Insert Vector", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Insert Vector",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {

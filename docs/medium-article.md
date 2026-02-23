@@ -35,7 +35,7 @@ A self-hosted **Kubernetes AI Knowledge System** with three core properties:
 | Chat model | Ollama + `qwen3:8b` | Generate natural-language responses |
 | K8s watcher | Python (`kubernetes` + `kafka-python`) | Watch K8s API, publish events to Kafka |
 | Kubernetes cluster | kind | Local cluster for development |
-| Container runtime | Docker Compose | Orchestrate all services |
+| Container runtime | Kubernetes (kind) | All services run as pods in the `k8s-ai` namespace |
 
 Everything runs on your laptop. No OpenAI key. No cloud egress.
 
@@ -69,7 +69,7 @@ User question
                         │  K8s Watch API (streaming, 9 resource types)
                         ▼
               ┌─────────────────────┐
-              │    k8s-watcher      │  Python, Docker, port 8085
+              │    k8s-watcher      │  Python, k8s-ai pod, NodePort 30002
               │    9 watch threads  │  /healthz · /resync
               └──────────┬──────────┘
                          │  ADDED | MODIFIED | DELETED events (JSON)
@@ -87,7 +87,7 @@ User question
   └────────────────────────────┬─────────────────────────────────┘
                                ▼
                       ┌─────────────────┐
-                      │     Qdrant      │  768-dim Cosine, port 6333
+                      │     Qdrant      │  768-dim Cosine, NodePort 30001
                       │  collection: k8s│  ID = resource_uid (K8s UUID)
                       └────────┬────────┘
                                │
@@ -114,9 +114,9 @@ User question
 
 Before cloning the repo, you need five tools installed on your machine. This section walks through each one.
 
-### 1. Docker & Docker Compose
+### 1. Docker
 
-Docker runs the five containerised services (n8n, Qdrant, Kafka, Debezium, k8s-watcher). Docker Compose orchestrates them.
+Docker is required by kind (which runs each Kubernetes node as a Docker container) and to build the k8s-watcher image before loading it into the cluster.
 
 **macOS:**
 ```bash
@@ -131,15 +131,11 @@ brew install --cask docker
 curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker $USER    # allows running docker without sudo
 newgrp docker                    # apply group change immediately
-
-# Docker Compose v2 is included with the Docker Engine package above
-docker compose version           # should print: Docker Compose version v2.x.x
 ```
 
 **Verify:**
 ```bash
-docker --version         # Docker version 29.x.x
-docker compose version   # Docker Compose version v2.x.x
+docker --version    # Docker version 29.x.x
 ```
 
 ---
@@ -256,7 +252,7 @@ ollama list
 | CPU | 4 cores | 8+ cores |
 | OS | macOS 13 / Ubuntu 22.04 | macOS 15 / Ubuntu 24.04 |
 
-The heavy memory consumers are `qwen3:8b` (Ollama, ~8 GB RAM), the kind cluster, and the five Docker containers. On a 16 GB machine everything fits; on an 8 GB machine it will swap heavily.
+The heavy memory consumers are `qwen3:8b` (Ollama, ~8 GB RAM), the kind cluster, and the four pods running inside it. On a 16 GB machine everything fits; on an 8 GB machine it will swap heavily.
 
 ---
 
@@ -275,11 +271,13 @@ npx playwright install chromium
 
 ### Create the kind Cluster
 
+The cluster is created with a custom config that wires NodePorts (30000–30002) through to your host and mounts the `./data` directory inside the cluster node for persistent storage:
+
 ```bash
-kind create cluster --name k8s-ai
+kind create cluster --config infra/kind-config.yaml
 ```
 
-This creates a single-node cluster named `k8s-ai`. kubectl context `kind-k8s-ai` is added automatically.
+This creates a single-node cluster named `k8s-ai` with three host-port mappings. kubectl context `kind-k8s-ai` is added automatically.
 
 ```bash
 kubectl --context kind-k8s-ai get nodes
@@ -287,98 +285,59 @@ kubectl --context kind-k8s-ai get nodes
 # k8s-ai-control-plane  Ready    control-plane   30s   v1.32.x
 ```
 
-### Find the kind API Server Port
+### Deploy All Services to Kubernetes
 
-kind's API server binds to `127.0.0.1` on your host, but the k8s-watcher container needs to reach it via `host.docker.internal`. Run:
-
-```bash
-kubectl --context kind-k8s-ai cluster-info
-# Kubernetes control plane is running at https://127.0.0.1:PORT
-```
-
-Note the `PORT`. You will set `K8S_SERVER=https://host.docker.internal:PORT` in `docker-compose.yml`.
-
-### Docker Compose — The Five Services
-
-The `docker-compose.yml` file defines all five services:
-
-```yaml
-services:
-  n8n:
-    image: n8nio/n8n:latest
-    ports: ["5678:5678"]
-    environment:
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=admin
-      - N8N_BASIC_AUTH_PASSWORD=admin
-      - N8N_SECURE_COOKIE=false
-    extra_hosts: ["host.docker.internal:host-gateway"]
-    volumes: [./data/n8n:/home/node/.n8n]
-
-  qdrant:
-    image: qdrant/qdrant:latest
-    ports: ["6333:6333"]
-    volumes: [./data/qdrant:/qdrant/storage]
-
-  kafka:
-    image: confluentinc/cp-kafka:latest
-    ports: ["9092:9092"]
-    environment:
-      KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      CLUSTER_ID: Ak1F_A09TmqoaO_XHZMvEw
-
-  k8s-watcher:
-    build: { context: ./k8s-watcher }
-    ports: ["8085:8080"]
-    environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      KAFKA_TOPIC: k8s-resources
-      KUBECONFIG: /root/.kube/config
-      K8S_SERVER: https://host.docker.internal:YOUR_KIND_PORT   # ← replace this
-    volumes: ["${HOME}/.kube/config:/root/.kube/config:ro"]
-    extra_hosts: ["host.docker.internal:host-gateway"]
-    restart: unless-stopped
-
-  debezium:
-    image: quay.io/debezium/connect:3.0
-    # Kept for reference — not used; k8s-watcher replaced this component
-```
-
-**Key configuration notes:**
-- `extra_hosts: host.docker.internal:host-gateway` — lets containers reach Ollama and the kind API server on the host. Essential on Linux; macOS Docker Desktop sets this automatically.
-- `K8S_SERVER` — replace `YOUR_KIND_PORT` with the port you found in the cluster-info step.
-- `restart: unless-stopped` on k8s-watcher — the most critical service. Auto-restart keeps Qdrant in sync across Docker restarts.
-- `N8N_SECURE_COOKIE=false` — required when running n8n over plain HTTP (localhost). Without this, the session cookie is rejected by the browser.
-
-### Start All Services
+All four services (n8n, Qdrant, Kafka, k8s-watcher) run as pods inside the `k8s-ai` namespace. Deploy them in order:
 
 ```bash
-docker compose up -d
+# Namespace and persistent volumes (cluster-scoped)
+kubectl --context kind-k8s-ai apply -f infra/k8s/00-namespace.yaml
+kubectl --context kind-k8s-ai apply -f infra/k8s/01-pvs.yaml
+
+# Kafka (n8n CDC depends on it — deploy first)
+kubectl --context kind-k8s-ai apply -f infra/k8s/kafka/
+kubectl --context kind-k8s-ai -n k8s-ai rollout status statefulset/kafka --timeout=120s
+
+# Qdrant
+kubectl --context kind-k8s-ai apply -f infra/k8s/qdrant/
+kubectl --context kind-k8s-ai -n k8s-ai rollout status deployment/qdrant --timeout=60s
+
+# k8s-watcher (build image first, then load into kind)
+docker build -t k8s-watcher:latest ./k8s-watcher/
+kind load docker-image k8s-watcher:latest --name k8s-ai
+kubectl --context kind-k8s-ai apply -f infra/k8s/k8s-watcher/
+kubectl --context kind-k8s-ai -n k8s-ai rollout status deployment/k8s-watcher --timeout=90s
+
+# n8n
+kubectl --context kind-k8s-ai apply -f infra/k8s/n8n/
+kubectl --context kind-k8s-ai -n k8s-ai rollout status deployment/n8n --timeout=120s
 ```
 
-Wait ~20 seconds for all services to initialise, then verify:
+Wait for all pods to reach `Running` state:
 
 ```bash
-docker compose ps
-# NAME                        STATUS
-# kind_vector_n8n-n8n-1       Up
-# kind_vector_n8n-qdrant-1    Up
-# kind_vector_n8n-kafka-1     Up
-# kind_vector_n8n-k8s-watcher-1  Up
-# kind_vector_n8n-debezium-1  Up (unused)
+kubectl --context kind-k8s-ai -n k8s-ai get pods
+# NAME                           READY   STATUS    RESTARTS
+# kafka-0                        1/1     Running   0
+# qdrant-xxxxx                   1/1     Running   0
+# k8s-watcher-xxxxx              1/1     Running   0
+# n8n-xxxxx                      1/1     Running   0
 ```
+
+**Key Kubernetes design notes:**
+
+- **NodePorts** — three NodePort services expose the pods to the host: n8n on `:30000`, Qdrant on `:30001`, k8s-watcher on `:30002`. kind's `extraPortMappings` forwards these through to `localhost` on your machine.
+- **hostAliases** — the n8n pod has `host.docker.internal` mapped to `192.168.1.154` (your host IP) via `hostAliases`. This keeps all workflow URLs pointing to Ollama unchanged.
+- **`enableServiceLinks: false`** on the Kafka StatefulSet — Kubernetes auto-injects a `KAFKA_PORT=tcp://...` env var from the ClusterIP Service. The CP Kafka startup script chokes on this URL-format value. Disabling service links prevents the injection.
+- **initContainers** — both Kafka and n8n run a `busybox chown -R 1000:1000` initContainer. If the `./data` volumes were previously written by Docker Compose as root, this fixes permissions before the main container starts (CP Kafka and n8n both run as uid 1000).
+- **In-cluster config** — k8s-watcher uses `config.load_incluster_config()` via the pod's mounted ServiceAccount token. No `KUBECONFIG` or `K8S_SERVER` env vars needed.
 
 ### Create the Qdrant Vector Collection
 
 The Qdrant collection must be created once before any vectors can be inserted. The collection schema specifies 768 dimensions and Cosine similarity — the exact parameters required by `nomic-embed-text`.
 
 ```bash
-curl -X PUT http://localhost:6333/collections/k8s \
+curl -X PUT http://localhost:30001/collections/k8s \
   -H 'Content-Type: application/json' \
   -d '{
     "vectors": { "size": 768, "distance": "Cosine" },
@@ -390,7 +349,7 @@ curl -X PUT http://localhost:6333/collections/k8s \
 
 ### n8n First-Run: Owner Account Setup
 
-Open `http://localhost:5678` in a browser. The first visit presents the owner account creation form — fill in your email, first name, last name, and a password. This becomes the primary admin account.
+Open `http://localhost:30000` in a browser. The first visit presents the owner account creation form — fill in your email, first name, last name, and a password. This becomes the primary admin account.
 
 ![n8n sign-in page — before owner setup, the login screen shows email + password fields](screenshots/01-signin-page.png)
 
@@ -447,23 +406,32 @@ Labels: k8s-app=kube-dns. Spec: {"replicas":2,"selector":{...}}
 
 Why full sentences instead of `kind:Deployment name:coredns ns:kube-system`? Because `nomic-embed-text` was trained on natural-language text. Feeding it structured key=value pairs produces poor embeddings and low similarity scores. Natural-language sentences lift cosine similarity scores from the 0.15–0.28 range into the 0.38–0.70 range. This single change had the largest impact on system quality.
 
-### The Kind API Server Host Override
+### In-Cluster Kubernetes Auth
+
+When k8s-watcher runs as a pod, Kubernetes automatically mounts a ServiceAccount token at `/var/run/secrets/kubernetes.io/serviceaccount/`. The watcher detects this via the `KUBERNETES_SERVICE_HOST` environment variable (automatically set in every pod) and uses it:
 
 ```python
 def load_k8s():
-    cfg = client.Configuration()
-    config.load_kube_config(config_file=KUBECONFIG, client_configuration=cfg)
-    if K8S_SERVER:
-        cfg.host = K8S_SERVER          # https://host.docker.internal:PORT
-        cfg.verify_ssl = False         # cert is issued for 127.0.0.1, not this host
-    client.Configuration.set_default(cfg)
+    if os.getenv("KUBERNETES_SERVICE_HOST"):
+        # Running inside a pod — use the mounted ServiceAccount token
+        config.load_incluster_config()
+        log.info("K8s client configured — in-cluster (ServiceAccount token)")
+    else:
+        # Local dev / Docker Compose fallback — use kubeconfig
+        cfg = client.Configuration()
+        config.load_kube_config(config_file=KUBECONFIG, client_configuration=cfg)
+        if K8S_SERVER:
+            cfg.host = K8S_SERVER      # https://host.docker.internal:PORT
+            cfg.verify_ssl = False
+        client.Configuration.set_default(cfg)
+        log.info("K8s client configured — server: %s", cfg.host)
 ```
 
-kind's API server binds to `127.0.0.1`. From inside a Docker container, `127.0.0.1` is the container itself. `K8S_SERVER` replaces it with `host.docker.internal`, the Docker bridge address that routes to the host. SSL verification is disabled because the TLS certificate was issued for `127.0.0.1`, not `host.docker.internal`.
+The ServiceAccount is granted a ClusterRole with `list` and `watch` permissions on the nine monitored resource types via RBAC manifests in `infra/k8s/k8s-watcher/k8s-watcher-rbac.yaml`. No kubeconfig file, no hardcoded API server URL, no port hunting after every cluster recreation.
 
 ### The HTTP Server — healthz and resync
 
-The watcher also exposes a lightweight HTTP server on port 8080 (mapped to 8085 on the host):
+The watcher also exposes a lightweight HTTP server on port 8080 (NodePort 30002 on the host):
 
 ```python
 # GET /healthz → {"status":"ok"}
@@ -498,32 +466,37 @@ Click **Add credential**, search for **Kafka**, and select it. Fill in:
 | Credential Name | `Kafka Local` |
 | Bootstrap Servers | `kafka:9092` |
 
-Use the internal container hostname `kafka` (not `localhost`) — n8n runs inside Docker and resolves `kafka` to the Kafka container directly.
+Use the internal Kubernetes service hostname `kafka` (not `localhost`) — n8n runs as a pod and resolves `kafka` to the Kafka ClusterIP Service directly via cluster DNS.
 
 ### Option A: Import from JSON (Recommended)
 
 ```bash
-# Copy workflow JSON files into the container
-docker cp workflows/n8n_cdc_k8s_flow.json   kind_vector_n8n-n8n-1:/tmp/
-docker cp workflows/n8n_ai_k8s_flow.json    kind_vector_n8n-n8n-1:/tmp/
-docker cp workflows/n8n_reset_k8s_flow.json kind_vector_n8n-n8n-1:/tmp/
+# Get the n8n pod name
+N8N_POD=$(kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=n8n \
+  -o jsonpath='{.items[0].metadata.name}')
+
+# Copy workflow JSON files into the pod
+kubectl --context kind-k8s-ai -n k8s-ai cp workflows/n8n_cdc_k8s_flow.json   ${N8N_POD}:/tmp/
+kubectl --context kind-k8s-ai -n k8s-ai cp workflows/n8n_ai_k8s_flow.json    ${N8N_POD}:/tmp/
+kubectl --context kind-k8s-ai -n k8s-ai cp workflows/n8n_reset_k8s_flow.json ${N8N_POD}:/tmp/
 
 # Import them
-docker exec kind_vector_n8n-n8n-1 n8n import:workflow --input=/tmp/n8n_cdc_k8s_flow.json
-docker exec kind_vector_n8n-n8n-1 n8n import:workflow --input=/tmp/n8n_ai_k8s_flow.json
-docker exec kind_vector_n8n-n8n-1 n8n import:workflow --input=/tmp/n8n_reset_k8s_flow.json
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_cdc_k8s_flow.json
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_ai_k8s_flow.json
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_reset_k8s_flow.json
 
 # Find the assigned IDs
-docker exec kind_vector_n8n-n8n-1 n8n list:workflow
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n list:workflow
 # id:sLFyTfSNzFIiVC9t  name:CDC_K8s_Flow
 # id:5cf0evFgopkFXM7q  name:AI_K8s_Flow
 # id:JItVx5wVu0WTIvkA  name:Reset_K8s_Flow
 
 # Activate all three workflows
-docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=sLFyTfSNzFIiVC9t
-docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=5cf0evFgopkFXM7q
-docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=JItVx5wVu0WTIvkA
-docker restart kind_vector_n8n-n8n-1
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=sLFyTfSNzFIiVC9t
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=5cf0evFgopkFXM7q
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=JItVx5wVu0WTIvkA
+kubectl --context kind-k8s-ai -n k8s-ai rollout restart deployment/n8n
+kubectl --context kind-k8s-ai -n k8s-ai rollout status deployment/n8n --timeout=60s
 ```
 
 > **Known n8n 2.6.4 bug:** `N8N_BASIC_AUTH_ACTIVE=true` causes the body-parser middleware to reject all `POST /rest/*` requests. The browser UI toggle and REST API both fail silently. The only reliable way to activate workflows is `n8n publish:workflow` via the CLI inside the container.
@@ -817,10 +790,12 @@ The `$json` reference carries the `{ "points": [...] }` object built by Node 6 d
 Save the workflow (Ctrl/Cmd + S), then activate it from the CLI:
 
 ```bash
-docker exec kind_vector_n8n-n8n-1 n8n list:workflow
+N8N_POD=$(kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=n8n \
+  -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n list:workflow
 # note the CDC workflow ID
-docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=<CDC_ID>
-docker restart kind_vector_n8n-n8n-1
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=<CDC_ID>
+kubectl --context kind-k8s-ai -n k8s-ai rollout restart deployment/n8n
 ```
 
 ### CDC Flow in Action
@@ -860,7 +835,7 @@ Press **Tab** → search **"chat trigger"** → select **Chat Trigger**. This is
 | Make Chat Publicly Available | Toggle **ON** |
 | Webhook ID | `k8s-ai-chat` |
 
-This creates the public endpoint: `http://localhost:5678/webhook/k8s-ai-chat/chat`
+This creates the public endpoint: `http://localhost:30000/webhook/k8s-ai-chat/chat`
 
 No authentication is required on this endpoint — intentional for a local development environment. The Chat Trigger:
 - Holds the HTTP connection open while the workflow runs
@@ -870,7 +845,7 @@ No authentication is required on this endpoint — intentional for a local devel
 You can reach it from a browser (n8n renders a chat UI) or from curl:
 
 ```bash
-curl -X POST http://localhost:5678/webhook/k8s-ai-chat/chat \
+curl -X POST http://localhost:30000/webhook/k8s-ai-chat/chat \
   -H 'Content-Type: application/json' \
   -d '{"chatInput": "Show me all deployments and their replica counts"}'
 ```
@@ -1060,15 +1035,17 @@ n8n's Chat Trigger automatically surfaces the top-level `output` field as the ch
 ### Activate the AI Flow
 
 ```bash
-docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=<AI_ID>
-docker restart kind_vector_n8n-n8n-1
+N8N_POD=$(kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=n8n \
+  -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=<AI_ID>
+kubectl --context kind-k8s-ai -n k8s-ai rollout restart deployment/n8n
 ```
 
 ### The AI Flow in Action
 
 ![Public chat UI — "Hi there!" greeting, text input at the bottom](screenshots/09-ai-chat-public.png)
 
-Opening `http://localhost:5678/webhook/k8s-ai-chat/chat` presents n8n's built-in chat widget. No login, no setup — type and ask.
+Opening `http://localhost:30000/webhook/k8s-ai-chat/chat` presents n8n's built-in chat widget. No login, no setup — type and ask.
 
 ![Query typed: "List all namespaces in the Kubernetes cluster"](screenshots/10-ai-chat-query-typed.png)
 
@@ -1112,7 +1089,7 @@ Press **Tab** → search **"webhook"** → select **Webhook**. This is the entry
 
 **How to trigger:**
 ```bash
-curl -s -X POST http://localhost:5678/webhook/k8s-reset \
+curl -s -X POST http://localhost:30000/webhook/k8s-reset \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
@@ -1177,7 +1154,7 @@ Calls the k8s-watcher's `/resync` endpoint, which lists all nine tracked resourc
 | Method | `POST` |
 | URL | `http://k8s-watcher:8080/resync` |
 
-Note the internal container port `8080` (mapped to `8085` on the host in docker-compose.yml — but container-to-container traffic uses the internal port directly).
+Note the internal Kubernetes Service port `8080` (exposed as NodePort `30002` on the host — but pod-to-pod traffic uses the ClusterIP Service port directly).
 
 **The watcher's response:** `{"status":"accepted","message":"Resync started in background"}` — 202 Accepted immediately, resync runs in a daemon thread. The CDC flow then processes each event asynchronously. On a minimal kind cluster, Qdrant is fully repopulated within 30–45 seconds.
 
@@ -1219,8 +1196,10 @@ return [{
 ### Activate the Reset Flow
 
 ```bash
-docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=<RESET_ID>
-docker restart kind_vector_n8n-n8n-1
+N8N_POD=$(kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=n8n \
+  -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=<RESET_ID>
+kubectl --context kind-k8s-ai -n k8s-ai rollout restart deployment/n8n
 ```
 
 ### Reset Flow Execution History
@@ -1285,19 +1264,24 @@ The original design used Debezium's MongoDB connector to watch etcd — Kubernet
 
 Wiring the watcher directly to n8n's webhook endpoint is simpler but loses events during n8n restarts. Kafka's consumer group offset tracking means the CDC pipeline resumes exactly where it left off after any restart. This is not over-engineering — it is the difference between a reliable system and one that silently falls behind.
 
+### 6. `enableServiceLinks: false` on the Kafka StatefulSet
+
+Kubernetes automatically injects environment variables for every ClusterIP Service in the namespace. With a Service named `kafka`, every pod receives `KAFKA_PORT=tcp://10.x.x.x:9092`. The Confluent Platform Kafka startup script iterates every `KAFKA_*` environment variable and fails when it encounters a URL-format value. The fix is one line: `enableServiceLinks: false` on the StatefulSet pod spec. Without it, the Kafka pod enters CrashLoopBackOff with logs truncated to four lines — a particularly difficult failure to diagnose because the startup script exits before printing anything useful.
+
 ---
 
 ## Troubleshooting
 
 | Symptom | Likely Cause | Fix |
 |---|---|---|
-| CDC flow not triggering | Containers stopped | `docker compose up -d` |
-| LLM returns "No indexed resources" | Qdrant has 0 points | `curl -X POST http://localhost:5678/webhook/k8s-reset` then wait 45s |
-| Workflow webhooks return 404 | Workflows not active | Re-import and run `n8n publish:workflow --id=...` |
+| CDC flow not triggering | Pod not running | `kubectl -n k8s-ai get pods` — if not Running, `kubectl apply -f infra/k8s/` |
+| LLM returns "No indexed resources" | Qdrant has 0 points | `curl -X POST http://localhost:30000/webhook/k8s-reset` then wait 45s |
+| Workflow webhooks return 404 | Workflows not active | `kubectl exec ${N8N_POD} -- n8n publish:workflow --id=...` then rollout restart |
 | Embedding scores all below 0.3 | embed_text format wrong | Verify natural-language sentence format in Parse Message node |
-| k8s-watcher exits | K8S_SERVER wrong | Update port in docker-compose.yml: `kubectl cluster-info` |
+| k8s-watcher CrashLoopBackOff | RBAC not applied | `kubectl apply -f infra/k8s/k8s-watcher/k8s-watcher-rbac.yaml` |
+| Kafka CrashLoopBackOff (port deprecated) | `enableServiceLinks` injecting `KAFKA_PORT` | Ensure `enableServiceLinks: false` is set in kafka-statefulset.yaml |
 | n8n activation fails via UI | n8n 2.6.4 basic-auth bug | Use `n8n publish:workflow` CLI only |
-| Ollama unreachable from Docker | host.docker.internal not set | Add `extra_hosts: ["host.docker.internal:host-gateway"]` to docker-compose.yml |
+| Ollama unreachable from n8n pod | hostAliases not set | Verify `hostAliases` in n8n-deployment.yaml maps `host.docker.internal` → your host IP |
 
 ---
 
@@ -1312,11 +1296,11 @@ Wiring the watcher directly to n8n's webhook endpoint is simpler but loses event
 
 ## Getting the Code
 
-Everything in this article — Docker Compose configuration, the k8s-watcher Python service, all three n8n workflow JSON files, the Qdrant collection schema, Playwright E2E tests, and the screenshot capture script — is available at:
+Everything in this article — Kubernetes manifests (`infra/k8s/`), the kind cluster config (`infra/kind-config.yaml`), the k8s-watcher Python service, all three n8n workflow JSON files, the Qdrant collection schema, Playwright E2E tests, and the screenshot capture script — is available at:
 
 **[github.com/a2z-ice/k8s-ai-knowledge-system](https://github.com/a2z-ice/k8s-ai-knowledge-system)**
 
-Clone it, install prerequisites, run `docker compose up -d`, import the workflows, and you have a working local Kubernetes AI in under 15 minutes.
+Clone it, install prerequisites, run `kind create cluster --config infra/kind-config.yaml && kubectl apply -f infra/k8s/`, import the workflows, and you have a working local Kubernetes AI entirely inside the cluster — no Docker Compose required.
 
 ---
 
