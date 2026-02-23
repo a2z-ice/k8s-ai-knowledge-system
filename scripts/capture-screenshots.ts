@@ -21,15 +21,27 @@
 
 import { test, expect, chromium, Page } from '@playwright/test';
 import { execFileSync } from 'child_process';
-import { writeFileSync, unlinkSync, existsSync, mkdirSync } from 'fs';
+import { writeFileSync, unlinkSync, existsSync, mkdirSync, readFileSync } from 'fs';
 import * as path from 'path';
 
 const ROOT        = path.resolve(__dirname, '..');
 const SCREENSHOTS = path.join(ROOT, 'docs', 'screenshots');
 const OVERRIDE    = path.join(ROOT, 'docker-compose.override.yml');
 const N8N         = 'http://localhost:5678';
-const EMAIL       = process.env.N8N_EMAIL ?? 'your-email@example.com';
-const PASS        = process.env.N8N_PASS  ?? 'your-password';
+
+// Load .env from project root if it exists (fallback to environment variables)
+const envFile = path.join(ROOT, '.env');
+if (existsSync(envFile)) {
+  for (const line of readFileSync(envFile, 'utf-8').split('\n')) {
+    const [key, ...rest] = line.split('=');
+    if (key && !key.startsWith('#') && rest.length) {
+      process.env[key.trim()] ??= rest.join('=').trim();
+    }
+  }
+}
+
+const EMAIL = process.env.N8N_EMAIL ?? (() => { throw new Error('Set N8N_EMAIL in .env or environment'); })();
+const PASS  = process.env.N8N_PASS  ?? (() => { throw new Error('Set N8N_PASS in .env or environment');  })();
 const CDC_ID      = 'sLFyTfSNzFIiVC9t';
 const AI_ID      = '5cf0evFgopkFXM7q';
 const RESET_ID   = 'JItVx5wVu0WTIvkA';
