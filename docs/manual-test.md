@@ -1,19 +1,19 @@
 # Manual Test Guide — Kubernetes AI Knowledge System
 
-**Version:** 1.3
-**Date:** 2026-02-22
+**Version:** 1.4
+**Date:** 2026-02-23
 **Environment:** macOS · Docker Desktop · kind v0.24+ · n8n 2.6.4
 
 Complete step-by-step verification of the Kubernetes AI Knowledge System — from infrastructure health through to live CDC event observation and AI query validation in the n8n browser UI. Every command and browser step has been verified against the live running environment.
 
-> **Generate screenshots first:** Run `npm run screenshots` from the project root once before following this guide. This auto-captures all UI screenshots referenced throughout.
+> **Generate screenshots first:** Set up your `.env` file (see §2.5 below), then run `npm run screenshots` from the project root. This auto-captures all UI screenshots referenced throughout.
 
 ---
 
 ## Table of Contents
 
 1. [Credentials & Endpoints](#1-credentials--endpoints)
-2. [Prerequisites Checklist](#2-prerequisites-checklist)
+2. [Prerequisites Checklist](#2-prerequisites-checklist) *(includes §2.5 — .env screenshot credentials)*
 3. [Section A — Infrastructure Health](#section-a--infrastructure-health)
 4. [Section B — Kafka & CDC Pipeline (Terminal)](#section-b--kafka--cdc-pipeline-terminal)
 5. [Section C — n8n Sign-In (UI)](#section-c--n8n-sign-in-ui)
@@ -100,6 +100,44 @@ kind_vector_n8n-qdrant-1        Up   0.0.0.0:6333->6333/tcp
 ```
 
 If any container is missing: `docker compose -f docker-compose.yml up -d` (wait 20 s for Kafka KRaft init).
+
+### 2.5 Screenshot Credentials (.env)
+
+The screenshot capture script (`npm run screenshots`) logs into n8n using your owner credentials. These must be provided via a `.env` file — they are never stored in the repository.
+
+**One-time setup:**
+
+```bash
+cp .env.example .env
+```
+
+Then open `.env` and fill in the two values:
+
+```dotenv
+N8N_EMAIL=your-owner-email@example.com
+N8N_PASS=your-owner-password
+```
+
+These are the credentials you set when you first visited http://localhost:5678 and completed the n8n owner registration form.
+
+> **`.env` is gitignored** — it will never be committed. `.env.example` (committed) documents the required keys with placeholder values.
+
+Once `.env` is in place, run:
+
+```bash
+npm run screenshots
+```
+
+To run screenshots without a `.env` file, pass the values inline:
+
+```bash
+N8N_EMAIL=you@example.com N8N_PASS=yourpassword npm run screenshots
+```
+
+If either variable is missing the script exits immediately with a clear error:
+```
+Error: Set N8N_EMAIL in .env or environment
+```
 
 ---
 
