@@ -110,9 +110,197 @@ User question
 
 ---
 
+## Prerequisites
+
+Before cloning the repo, you need five tools installed on your machine. This section walks through each one.
+
+### 1. Docker & Docker Compose
+
+Docker runs the five containerised services (n8n, Qdrant, Kafka, Debezium, k8s-watcher). Docker Compose orchestrates them.
+
+**macOS:**
+```bash
+# Install Docker Desktop (includes Compose)
+brew install --cask docker
+# Open Docker Desktop from Applications and wait for the engine to start
+```
+
+**Linux (Ubuntu/Debian):**
+```bash
+# Install Docker Engine
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER    # allows running docker without sudo
+newgrp docker                    # apply group change immediately
+
+# Docker Compose v2 is included with the Docker Engine package above
+docker compose version           # should print: Docker Compose version v2.x.x
+```
+
+**Verify:**
+```bash
+docker --version         # Docker version 29.x.x
+docker compose version   # Docker Compose version v2.x.x
+```
+
+---
+
+### 2. Node.js 18 or Later
+
+Node.js is required to run the Playwright E2E test suite and the screenshot script.
+
+**macOS:**
+```bash
+brew install node
+```
+
+**Linux:**
+```bash
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+```
+
+**Verify:**
+```bash
+node --version    # v20.x.x or v18.x.x
+npm --version     # 10.x.x
+```
+
+---
+
+### 3. kind — Kubernetes in Docker
+
+kind creates a local Kubernetes cluster as a Docker container. The system watches this cluster's resources.
+
+**macOS:**
+```bash
+brew install kind
+```
+
+**Linux:**
+```bash
+curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+chmod +x ./kind
+sudo mv ./kind /usr/local/bin/kind
+```
+
+**Verify:**
+```bash
+kind version    # kind v0.31.0 go1.25.5 darwin/arm64
+```
+
+---
+
+### 4. kubectl
+
+kubectl is the CLI for interacting with Kubernetes clusters. The k8s-watcher tests and E2E tests use it.
+
+**macOS:**
+```bash
+brew install kubectl
+```
+
+**Linux:**
+```bash
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+chmod +x kubectl
+sudo mv kubectl /usr/local/bin/kubectl
+```
+
+**Verify:**
+```bash
+kubectl version --client    # Client Version: v1.34.x
+```
+
+---
+
+### 5. Ollama (on the host machine — never in Docker)
+
+Ollama runs the embedding and chat models locally. **It must run on your host machine, not in Docker.** All Docker containers reach it via `host.docker.internal:11434`.
+
+**macOS:**
+```bash
+brew install ollama
+# Or download from https://ollama.com and run the installer
+```
+
+**Linux:**
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+After installing, pull both models:
+
+```bash
+ollama pull nomic-embed-text    # 768-dim embedding model — ~274MB
+ollama pull qwen3:8b            # 8B parameter chat/reasoning model — ~5.2GB
+```
+
+**Verify both models are present:**
+```bash
+ollama list
+# NAME                   ID              SIZE      MODIFIED
+# qwen3:8b               ...             5.2 GB    ...
+# nomic-embed-text:latest ...            274 MB    ...
+```
+
+> **Note:** `qwen3:8b` is a 5.2 GB download. Pull it before starting the setup so it doesn't time out during the workflow run.
+
+---
+
+### System Requirements Summary
+
+| Requirement | Minimum | Recommended |
+|---|---|---|
+| RAM | 16 GB | 32 GB |
+| Free disk | 20 GB | 40 GB |
+| CPU | 4 cores | 8+ cores |
+| OS | macOS 13 / Ubuntu 22.04 | macOS 15 / Ubuntu 24.04 |
+
+The heavy memory consumers are `qwen3:8b` (Ollama, ~8 GB RAM), the kind cluster, and the five Docker containers. On a 16 GB machine everything fits; on an 8 GB machine it will swap heavily.
+
+---
+
 ## Part 1: Infrastructure Setup
 
+### Clone the Repository
+
+```bash
+git clone https://github.com/a2z-ice/k8s-ai-knowledge-system.git
+cd k8s-ai-knowledge-system
+
+# Install Node.js dependencies (for tests and screenshots)
+npm install
+npx playwright install chromium
+```
+
+### Create the kind Cluster
+
+```bash
+kind create cluster --name k8s-ai
+```
+
+This creates a single-node cluster named `k8s-ai`. kubectl context `kind-k8s-ai` is added automatically.
+
+```bash
+kubectl --context kind-k8s-ai get nodes
+# NAME                  STATUS   ROLES           AGE   VERSION
+# k8s-ai-control-plane  Ready    control-plane   30s   v1.32.x
+```
+
+### Find the kind API Server Port
+
+kind's API server binds to `127.0.0.1` on your host, but the k8s-watcher container needs to reach it via `host.docker.internal`. Run:
+
+```bash
+kubectl --context kind-k8s-ai cluster-info
+# Kubernetes control plane is running at https://127.0.0.1:PORT
+```
+
+Note the `PORT`. You will set `K8S_SERVER=https://host.docker.internal:PORT` in `docker-compose.yml`.
+
 ### Docker Compose — The Five Services
+
+The `docker-compose.yml` file defines all five services:
 
 ```yaml
 services:
@@ -151,35 +339,66 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_TOPIC: k8s-resources
       KUBECONFIG: /root/.kube/config
-      K8S_SERVER: https://host.docker.internal:YOUR_KIND_PORT
+      K8S_SERVER: https://host.docker.internal:YOUR_KIND_PORT   # ← replace this
     volumes: ["${HOME}/.kube/config:/root/.kube/config:ro"]
     extra_hosts: ["host.docker.internal:host-gateway"]
     restart: unless-stopped
+
+  debezium:
+    image: quay.io/debezium/connect:3.0
+    # Kept for reference — not used; k8s-watcher replaced this component
 ```
 
-**Key notes:**
-- `extra_hosts: host.docker.internal:host-gateway` — lets containers reach Ollama and the kind API server on the host (essential on Linux; macOS Docker Desktop sets this automatically)
-- `K8S_SERVER` — kind's API server binds to `127.0.0.1` on the host, which is unreachable from inside Docker. Replace `YOUR_KIND_PORT` with the actual port: `kubectl --context kind-k8s-ai cluster-info | grep "control plane"`
-- `restart: unless-stopped` on k8s-watcher — it is the most critical service; auto-restart keeps Qdrant in sync across Docker restarts
+**Key configuration notes:**
+- `extra_hosts: host.docker.internal:host-gateway` — lets containers reach Ollama and the kind API server on the host. Essential on Linux; macOS Docker Desktop sets this automatically.
+- `K8S_SERVER` — replace `YOUR_KIND_PORT` with the port you found in the cluster-info step.
+- `restart: unless-stopped` on k8s-watcher — the most critical service. Auto-restart keeps Qdrant in sync across Docker restarts.
+- `N8N_SECURE_COOKIE=false` — required when running n8n over plain HTTP (localhost). Without this, the session cookie is rejected by the browser.
 
-### Cluster, Models, and Collection
+### Start All Services
 
 ```bash
-# Create the kind cluster
-kind create cluster --name k8s-ai
-
-# Pull Ollama models on the host machine (not Docker)
-ollama pull nomic-embed-text   # 768-dim embedding model
-ollama pull qwen3:8b           # 8B parameter chat model
-
-# Start all services
 docker compose up -d
+```
 
-# Create the Qdrant vector collection (first time only)
+Wait ~20 seconds for all services to initialise, then verify:
+
+```bash
+docker compose ps
+# NAME                        STATUS
+# kind_vector_n8n-n8n-1       Up
+# kind_vector_n8n-qdrant-1    Up
+# kind_vector_n8n-kafka-1     Up
+# kind_vector_n8n-k8s-watcher-1  Up
+# kind_vector_n8n-debezium-1  Up (unused)
+```
+
+### Create the Qdrant Vector Collection
+
+The Qdrant collection must be created once before any vectors can be inserted. The collection schema specifies 768 dimensions and Cosine similarity — the exact parameters required by `nomic-embed-text`.
+
+```bash
 curl -X PUT http://localhost:6333/collections/k8s \
   -H 'Content-Type: application/json' \
-  -d '{"vectors":{"size":768,"distance":"Cosine"},"replication_factor":1}'
+  -d '{
+    "vectors": { "size": 768, "distance": "Cosine" },
+    "optimizers_config": { "default_segment_number": 2 },
+    "replication_factor": 1
+  }'
+# {"result":true,"status":"ok","time":0.012}
 ```
+
+### n8n First-Run: Owner Account Setup
+
+Open `http://localhost:5678` in a browser. The first visit presents the owner account creation form — fill in your email, first name, last name, and a password. This becomes the primary admin account.
+
+![n8n sign-in page — before owner setup, the login screen shows email + password fields](screenshots/01-signin-page.png)
+
+After creating the owner account, sign in. The first-time setup wizard may appear asking about usage preferences — you can skip it. You will land on the workflow dashboard.
+
+![n8n post-login landing — welcome banner, workflow dashboard](screenshots/02b-post-signin-landing.png)
+
+The dashboard is empty at this point. The next section walks through creating the Kafka credential and importing all three workflows.
 
 ---
 
@@ -203,9 +422,11 @@ watchers = [
 ]
 ```
 
-Each uses `watch.stream(list_fn, timeout_seconds=0)` — an infinite stream that reconnects automatically on error.
+Each uses `watch.stream(list_fn, timeout_seconds=0)` — an infinite stream that reconnects automatically on error. When the watcher starts, it also performs a full initial list of all resources and publishes ADDED events for everything in the cluster. This populates Qdrant on first run without needing a manual reset.
 
 ### The `embed_text` Construction — The Most Critical Detail
+
+The watcher constructs an `embed_text` field for each resource before publishing it to Kafka:
 
 ```python
 scope     = f"in namespace {namespace}" if namespace else "cluster-scoped"
@@ -242,30 +463,47 @@ kind's API server binds to `127.0.0.1`. From inside a Docker container, `127.0.0
 
 ### The HTTP Server — healthz and resync
 
+The watcher also exposes a lightweight HTTP server on port 8080 (mapped to 8085 on the host):
+
 ```python
 # GET /healthz → {"status":"ok"}
 # POST /resync  → 202 Accepted, then lists all 9 resource types
 #                 and republishes every item as ADDED to Kafka
 ```
 
-The `/resync` endpoint is what the Reset flow calls to rebuild Qdrant. It returns 202 immediately and runs the re-publish in a background thread, keeping the HTTP response time short.
+The `/resync` endpoint is what the Reset flow calls to rebuild Qdrant. It returns 202 immediately and runs the re-publish in a background thread, keeping the HTTP response time short. The full resync of a minimal kind cluster (35 resources) completes in about 30 seconds.
 
 ---
 
 ## Part 3: Building the n8n Workflows
 
-### The Dashboard
+There are two ways to get the workflows into n8n:
+1. **Import from JSON** (recommended — 2 minutes, no manual configuration)
+2. **Build from scratch** in the n8n UI (educational — this is what the rest of this article covers)
 
-After importing and activating all three workflows, this is what the n8n dashboard looks like:
+Both paths produce identical results.
 
-![n8n Workflow Dashboard — 73 executions, 0 failures, 0.1s avg](screenshots/03-workflow-dashboard.png)
+### Setting Up the Kafka Credential
 
-All three workflows carry the green **Published** badge. 73 total executions, 0 failures — the pipeline is running clean.
+Before building the CDC workflow, you need to create a Kafka credential in n8n. This credential stores the bootstrap server address and is referenced by the Kafka Trigger node.
 
-### Importing and Activating Workflows
+Navigate to **Credentials** in the left sidebar:
+
+![n8n Credentials page — list of existing credentials](screenshots/cred-01-credentials-list.png)
+
+Click **Add credential**, search for **Kafka**, and select it. Fill in:
+
+| Field | Value |
+|---|---|
+| Credential Name | `Kafka Local` |
+| Bootstrap Servers | `kafka:9092` |
+
+Use the internal container hostname `kafka` (not `localhost`) — n8n runs inside Docker and resolves `kafka` to the Kafka container directly.
+
+### Option A: Import from JSON (Recommended)
 
 ```bash
-# Copy JSON files into the container
+# Copy workflow JSON files into the container
 docker cp workflows/n8n_cdc_k8s_flow.json   kind_vector_n8n-n8n-1:/tmp/
 docker cp workflows/n8n_ai_k8s_flow.json    kind_vector_n8n-n8n-1:/tmp/
 docker cp workflows/n8n_reset_k8s_flow.json kind_vector_n8n-n8n-1:/tmp/
@@ -275,21 +513,76 @@ docker exec kind_vector_n8n-n8n-1 n8n import:workflow --input=/tmp/n8n_cdc_k8s_f
 docker exec kind_vector_n8n-n8n-1 n8n import:workflow --input=/tmp/n8n_ai_k8s_flow.json
 docker exec kind_vector_n8n-n8n-1 n8n import:workflow --input=/tmp/n8n_reset_k8s_flow.json
 
-# List assigned IDs, then activate
+# Find the assigned IDs
 docker exec kind_vector_n8n-n8n-1 n8n list:workflow
-docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=<CDC_ID>
-docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=<AI_ID>
-docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=<RESET_ID>
+# id:sLFyTfSNzFIiVC9t  name:CDC_K8s_Flow
+# id:5cf0evFgopkFXM7q  name:AI_K8s_Flow
+# id:JItVx5wVu0WTIvkA  name:Reset_K8s_Flow
+
+# Activate all three workflows
+docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=sLFyTfSNzFIiVC9t
+docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=5cf0evFgopkFXM7q
+docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=JItVx5wVu0WTIvkA
 docker restart kind_vector_n8n-n8n-1
 ```
 
 > **Known n8n 2.6.4 bug:** `N8N_BASIC_AUTH_ACTIVE=true` causes the body-parser middleware to reject all `POST /rest/*` requests. The browser UI toggle and REST API both fail silently. The only reliable way to activate workflows is `n8n publish:workflow` via the CLI inside the container.
+
+### Option B: Build from Scratch in the n8n UI
+
+To create a workflow manually, click **Workflows** in the left sidebar, then click **Add Workflow** (or the `+` button). A blank canvas appears:
+
+![Blank n8n workflow canvas — empty, ready to add first node](screenshots/create-01-blank-canvas.png)
+
+To add your first node, press **Tab** or click the `+` button in the center of the canvas. The node creator panel slides in from the right:
+
+![n8n node creator panel — categories listed, search bar at top](screenshots/create-02-node-creator-open.png)
+
+The node creator shows a search bar and categorised node list. Type the node name to filter. The following screenshots show searches for each node type used across the three flows:
+
+**Searching "kafka trigger"** — the Kafka Trigger node (used in CDC_K8s_Flow):
+
+![Node creator search results for "kafka trigger"](screenshots/create-03-search-kafka-trigger.png)
+
+**Searching "http request"** — the HTTP Request node (used in all three flows for Qdrant and Ollama calls):
+
+![Node creator search results for "http request"](screenshots/create-04-search-http-request.png)
+
+**Searching "code"** — the Code node (used for JavaScript logic in all three flows):
+
+![Node creator search results for "code"](screenshots/create-05-search-code.png)
+
+**Searching "if"** — the If node (used in CDC_K8s_Flow to branch on event type):
+
+![Node creator search results for "if"](screenshots/create-06-search-if.png)
+
+**Searching "webhook"** — the Webhook node (used in Reset_K8s_Flow as the entry point):
+
+![Node creator search results for "webhook"](screenshots/create-07-search-webhook.png)
+
+**Searching "chat trigger"** — the Chat Trigger node (used in AI_K8s_Flow as the entry point):
+
+![Node creator search results for "chat trigger"](screenshots/create-08-search-chat-trigger.png)
+
+Click a result to place it on the canvas. Once placed, a single click on the node icon opens its configuration panel (the Node Details View, or NDV). The configuration panels shown in the sections below are what you will fill in for each node.
+
+### After All Three Workflows Are Active
+
+After importing or building all three workflows and activating them, the n8n dashboard shows:
+
+![n8n Workflow Dashboard — three workflows, Published badges, 73 executions](screenshots/03-workflow-dashboard.png)
+
+All three workflows carry the green **Published** badge. The execution count and zero failures confirm the pipeline is running clean.
+
+![n8n workflow list — active status badges visible on all three workflows](screenshots/04-workflow-list-active-badges.png)
 
 ---
 
 ## Flow 1: CDC_K8s_Flow — Continuous Indexing
 
 This is the backbone of the system. It runs permanently, consuming every Kubernetes change event from Kafka and keeping Qdrant in sync. Every resource change in the cluster is indexed within two seconds.
+
+**To create this flow:** In the n8n dashboard click **Add Workflow**, name it `CDC_K8s_Flow`, then add the seven nodes described below in left-to-right order. Connect them with edges (drag from the output dot of one node to the input dot of the next).
 
 ![CDC_K8s_Flow canvas — 7 nodes, Published badge visible](screenshots/05-cdc-workflow-canvas.png)
 
@@ -299,22 +592,26 @@ The canvas shows seven nodes left-to-right. At the "Is Delete Event?" branch, th
 
 ### CDC Node 1 — Kafka Trigger
 
+Press **Tab** → search **"kafka trigger"** → select **Kafka Trigger**. This is the entry point: it opens a persistent consumer connection to Kafka and fires the rest of the workflow for every message on the `k8s-resources` topic.
+
 ![Kafka Trigger configuration panel](screenshots/cdc-node-01-kafka-trigger.png)
 
-**Node type:** `n8n-nodes-base.kafkaTrigger`
-
-**What it does:** Opens a persistent consumer connection to Kafka and fires the rest of the workflow for every message that arrives on the `k8s-resources` topic.
-
-The screenshot shows exactly how to configure it:
+**Configuration:**
 
 | Field | Value | Why |
 |---|---|---|
-| Credential to connect with | `Kafka Local` | The Kafka credential you created (bootstrap: `kafka:9092`) |
+| Credential to connect with | `Kafka Local` | The credential you created (bootstrap: `kafka:9092`) |
 | Topic | `k8s-resources` | Must match `KAFKA_TOPIC` in the watcher's environment |
 | Group ID | `n8n-cdc-consumer` | Kafka tracks this group's offset — survives n8n restarts |
-| Allow Topic Creation | Off | Topic must already exist; disable accidental creation |
+| Allow Topic Creation | Off | Topic must already exist |
 
-Notice **Auto Offset Reset** is not shown because it lives under "Add option" — add it and set it to `earliest` so on first start the flow processes the full topic history.
+Under **Add option**, also add:
+
+| Option | Value |
+|---|---|
+| Auto Offset Reset | `earliest` |
+
+Setting `Auto Offset Reset: earliest` means on first start the flow processes the full topic history — critical if n8n starts after the watcher has already published events.
 
 **Why Kafka and not a direct webhook?** Consumer group offset tracking means if n8n restarts, it resumes exactly where it left off. No events are lost. No polling loops. If the watcher publishes events faster than n8n processes them, Kafka absorbs the backpressure.
 
@@ -322,13 +619,15 @@ Notice **Auto Offset Reset** is not shown because it lives under "Add option" �
 
 ### CDC Node 2 — Parse Message
 
+Press **Tab** → search **"code"** → select **Code**. Connect it to the Kafka Trigger output.
+
+This node unwraps the Kafka message envelope and constructs the `embed_text` string that will be converted into a vector.
+
 ![Parse Message code panel — JavaScript unwrapping the Kafka envelope](screenshots/cdc-node-02-parse-message.png)
 
-**Node type:** `n8n-nodes-base.code` (JavaScript)
+**Configuration:**
 
-**What it does:** The Kafka message arrives as a JSON string inside an envelope object. This node unwraps it and constructs the `embed_text` that will be converted into a vector.
-
-**Full code to paste into the JavaScript editor:**
+Set **Language** to `JavaScript`. Paste this code into the editor:
 
 ```javascript
 // The Kafka trigger delivers the raw message string in .message
@@ -358,17 +657,17 @@ if (!embed_text) {
 return [{ json: { ...data, embed_text } }];
 ```
 
-The fallback embed_text builder is a defensive layer — if the watcher version changes or a message arrives through a different path, the CDC flow can still produce a consistent embedding. Both the watcher and this node use identical logic, so vectors are always constructed the same way.
+The fallback `embed_text` builder is a defensive layer — if the watcher version changes or a message arrives through a different path, the CDC flow can still produce a consistent embedding. Both the watcher and this node use identical logic, so vectors are always constructed the same way.
 
 ---
 
 ### CDC Node 3 — Delete Existing Vector
 
+Press **Tab** → search **"http request"** → select **HTTP Request**. Connect it to the Parse Message output.
+
+This node removes any existing vector for this resource from Qdrant before inserting the updated one — the idempotency guarantee.
+
 ![Delete Existing Vector HTTP Request configuration](screenshots/cdc-node-03-delete-vector.png)
-
-**Node type:** `n8n-nodes-base.httpRequest`
-
-**What it does:** Removes any existing vector for this resource from Qdrant before inserting the updated one. This is the idempotency guarantee — for any Kubernetes UID, there is always exactly one vector in Qdrant.
 
 **Configuration:**
 
@@ -387,29 +686,37 @@ For brand-new resources (ADDED events), the delete call finds nothing and return
 
 ### CDC Node 4 — Is Delete Event?
 
+Press **Tab** → search **"if"** → select **If**. Connect it to the Delete Existing Vector output.
+
+This node routes the workflow based on the Kubernetes event type.
+
 ![Is Delete Event? If node — condition showing event_type equals DELETED](screenshots/cdc-node-04-is-delete.png)
 
-**Node type:** `n8n-nodes-base.if`
+**Configuration:**
 
-**What it does:** Routes the workflow based on the Kubernetes event type. The condition you can see in the screenshot: `{{ $('Parse Message').first().json.event_type }}` **is equal to** `DELETED`.
+Add one condition:
 
-The left INPUT panel shows the result from Delete Existing Vector (the Qdrant `status: "acknowledged"` response) confirming Node 3 ran successfully before this branch point.
+| Condition | Value |
+|---|---|
+| Value 1 | `{{ $('Parse Message').first().json.event_type }}` |
+| Operation | `is equal to` |
+| Value 2 | `DELETED` |
 
 **The two branches:**
-- **True** (DELETED event) — The vector was already removed in Node 3. The resource no longer exists in Kubernetes. Stop here. Nothing to embed or insert.
-- **False** (ADDED or MODIFIED) — The resource exists and its current state needs indexing. Continue to Node 5.
+- **True** (DELETED event) — The vector was already removed in Node 3. Stop here. Nothing to embed or insert.
+- **False** (ADDED or MODIFIED) — The resource exists and needs indexing. Continue to Node 5.
 
-This two-step pattern — delete unconditionally first, then branch — avoids the need for separate delete-only code paths. Every event type takes the same delete step, then branching decides whether to re-insert.
+Connect the **False** output to Node 5 below. The **True** output has no connection — the execution stops there.
 
 ---
 
 ### CDC Node 5 — Generate Embedding
 
+Press **Tab** → search **"http request"** → select **HTTP Request**. Connect it to the **False** output of the If node.
+
+This node sends the `embed_text` to Ollama's embedding API and receives a 768-dimensional float vector back.
+
 ![Generate Embedding — HTTP Request to Ollama nomic-embed-text](screenshots/cdc-node-05-generate-embedding.png)
-
-**Node type:** `n8n-nodes-base.httpRequest`
-
-**What it does:** Sends the `embed_text` to Ollama's embedding API and receives a 768-dimensional float vector back.
 
 **Configuration:**
 
@@ -437,19 +744,21 @@ Note `host.docker.internal` — Ollama runs on the host machine, not in Docker. 
 }
 ```
 
-`embeddings[0]` is the vector — 768 floats encoding the semantic meaning of the text. Two semantically similar sentences produce geometrically close vectors. A question about "what deployments exist in kube-system?" will produce a vector close to this Deployment's vector — which is exactly what cosine search will find.
+`embeddings[0]` is the vector — 768 floats encoding the semantic meaning of the text.
 
 ---
 
 ### CDC Node 6 — Build Qdrant Point
 
+Press **Tab** → search **"code"** → select **Code**. Connect it to the Generate Embedding output.
+
+This node combines the 768-dim vector from Node 5 with the resource metadata from Node 2 into a single Qdrant point object ready to insert.
+
 ![Build Qdrant Point — Code node assembling the full point payload](screenshots/cdc-node-06-build-point.png)
 
-**Node type:** `n8n-nodes-base.code` (JavaScript)
+**Configuration:**
 
-**What it does:** Combines the 768-dim vector from Node 5 with the resource metadata from Node 2 into a single Qdrant point object ready to insert.
-
-**Full code:**
+Set **Language** to `JavaScript`. Paste:
 
 ```javascript
 const embedding = $input.first().json.embeddings[0];
@@ -478,17 +787,17 @@ return [{
 
 **Why `resource_uid` as the Qdrant point ID?** The Kubernetes object UID is a stable UUID assigned at creation time — it never changes for the object's lifetime, even across renames. Using it as the Qdrant point ID means: delete-by-ID always targets the right vector, duplicates are impossible, and the ID survives namespace changes.
 
-**Why store `raw_spec_json` in the payload?** It travels with every search hit. The AI flow's Build Prompt node includes spec fragments in the LLM context, enabling answers to questions like "What are the CPU limits on the coredns deployment?"
+**Why store `raw_spec_json` in the payload?** It travels with every search hit, enabling the AI flow to answer questions like "What are the CPU limits on the coredns deployment?"
 
 ---
 
 ### CDC Node 7 — Insert Vector
 
+Press **Tab** → search **"http request"** → select **HTTP Request**. Connect it to the Build Qdrant Point output.
+
+This node PUTs the fully assembled point into Qdrant, completing the indexing pipeline for this event.
+
 ![Insert Vector — HTTP Request PUT to Qdrant](screenshots/cdc-node-07-insert-vector.png)
-
-**Node type:** `n8n-nodes-base.httpRequest`
-
-**What it does:** PUTs the fully assembled point into Qdrant, completing the indexing pipeline for this event.
 
 **Configuration:**
 
@@ -499,17 +808,26 @@ return [{
 | Body Content Type | `JSON` |
 | JSON Body | `={{ JSON.stringify($json) }}` |
 
-The `$json` reference carries the `{ "points": [...] }` object built by Node 6 directly. No transformation needed — just serialise and send.
+The `$json` reference carries the `{ "points": [...] }` object built by Node 6 directly. No transformation needed.
 
 **Qdrant's response:** `{"result":{"operation_id":1,"status":"completed"},"status":"ok"}`. The resource is now indexed and queryable. End-to-end from `kubectl apply` to searchable vector: under 2 seconds, dominated by the ~400–600ms Ollama embedding call.
 
----
+### Activate the CDC Flow
+
+Save the workflow (Ctrl/Cmd + S), then activate it from the CLI:
+
+```bash
+docker exec kind_vector_n8n-n8n-1 n8n list:workflow
+# note the CDC workflow ID
+docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=<CDC_ID>
+docker restart kind_vector_n8n-n8n-1
+```
 
 ### CDC Flow in Action
 
 ![CDC Executions — multiple successes in 49–466ms](screenshots/06-cdc-executions-list.png)
 
-The Executions tab shows a burst of events processed around 00:32:22 (a resync publishing many resources simultaneously). Fast DELETED-branch executions complete in 49–96ms. Full ADDED/MODIFIED executions (with embedding) take 450–466ms.
+The Executions tab shows a burst of events processed during a resync. Fast DELETED-branch executions complete in 49–96ms. Full ADDED/MODIFIED executions (with embedding) take 450–466ms.
 
 ![CDC Execution Detail — all 7 nodes green, false branch taken, item counts visible](screenshots/07-cdc-execution-detail.png)
 
@@ -521,6 +839,8 @@ Execution #277: all nodes show green checkmarks, "1 item" flows between each, an
 
 This flow answers user questions. It is completely stateless — each question triggers one end-to-end execution that embeds the query, retrieves context from Qdrant, and calls the LLM.
 
+**To create this flow:** In the n8n dashboard click **Add Workflow**, name it `AI_K8s_Flow`, then add the six nodes described below.
+
 ![AI_K8s_Flow canvas — 6 nodes in a straight line, Published](screenshots/08-ai-workflow-canvas.png)
 
 Six nodes, no branching. Every question flows through every node. The "Open chat" button at the bottom launches n8n's built-in chat UI connected to this flow's public webhook.
@@ -529,22 +849,20 @@ Six nodes, no branching. Every question flows through every node. The "Open chat
 
 ### AI Node 1 — Chat Trigger
 
+Press **Tab** → search **"chat trigger"** → select **Chat Trigger**. This is the entry point that exposes the public webhook.
+
 ![Chat Trigger configuration — public enabled, webhook ID k8s-ai-chat](screenshots/ai-node-01-chat-trigger.png)
-
-**Node type:** `@n8n/n8n-nodes-langchain.chatTrigger`
-
-**What it does:** Exposes a public webhook endpoint that accepts user questions and streams the workflow output back as the chat reply.
 
 **Configuration:**
 
 | Field | Value |
 |---|---|
-| Make Chat Publicly Available | Toggle ON |
-| Webhook ID | `k8s-ai-chat` (auto-generated; sets the public URL path) |
+| Make Chat Publicly Available | Toggle **ON** |
+| Webhook ID | `k8s-ai-chat` |
 
 This creates the public endpoint: `http://localhost:5678/webhook/k8s-ai-chat/chat`
 
-No authentication is required on this endpoint — intentional for a local development environment. The Chat Trigger node:
+No authentication is required on this endpoint — intentional for a local development environment. The Chat Trigger:
 - Holds the HTTP connection open while the workflow runs
 - Passes `{ "chatInput": "..." }` to the next node
 - Automatically sends the final `output` field back as the response
@@ -561,11 +879,11 @@ curl -X POST http://localhost:5678/webhook/k8s-ai-chat/chat \
 
 ### AI Node 2 — Generate Embedding
 
+Press **Tab** → search **"http request"** → select **HTTP Request**. Connect it to the Chat Trigger output.
+
+Converts the user's question into a 768-dim vector using the same `nomic-embed-text` model used during indexing.
+
 ![Generate Embedding — POST to Ollama with chatInput as the text to embed](screenshots/ai-node-02-generate-embedding.png)
-
-**Node type:** `n8n-nodes-base.httpRequest`
-
-**What it does:** Converts the user's question into a 768-dim vector using the same `nomic-embed-text` model used during indexing.
 
 **Configuration:**
 
@@ -576,7 +894,7 @@ curl -X POST http://localhost:5678/webhook/k8s-ai-chat/chat \
 | Body Content Type | `JSON` |
 | JSON Body | `={{ JSON.stringify({ model: 'nomic-embed-text', input: $json.chatInput }) }}` |
 
-**This symmetry is the foundation of RAG.** The question and the indexed documents are embedded by the same model — they exist in the same 768-dimensional semantic space. A question about "deployments in kube-system" produces a vector geometrically close to the Deployment resources whose embed_text mentions "kube-system". Cosine similarity will surface exactly those resources.
+**This symmetry is the foundation of RAG.** The question and the indexed documents are embedded by the same model — they exist in the same 768-dimensional semantic space. A question about "deployments in kube-system" produces a vector geometrically close to the Deployment resources whose embed_text mentions "kube-system".
 
 If you embedded queries with a different model than you used for indexing, the vectors would live in different spaces and search results would be meaningless.
 
@@ -584,11 +902,11 @@ If you embedded queries with a different model than you used for indexing, the v
 
 ### AI Node 3 — Qdrant Search
 
+Press **Tab** → search **"http request"** → select **HTTP Request**. Connect it to the Generate Embedding output.
+
+Takes the query vector and searches Qdrant for the 30 most semantically similar Kubernetes resources.
+
 ![Qdrant Search — POST with limit 30, score_threshold 0.3, with_payload true](screenshots/ai-node-03-qdrant-search.png)
-
-**Node type:** `n8n-nodes-base.httpRequest`
-
-**What it does:** Takes the query vector and searches Qdrant for the 30 most semantically similar Kubernetes resources.
 
 **Configuration:**
 
@@ -599,9 +917,9 @@ If you embedded queries with a different model than you used for indexing, the v
 | Body Content Type | `JSON` |
 | JSON Body | `={{ JSON.stringify({ vector: $json.embeddings[0], limit: 30, with_payload: true, score_threshold: 0.3 }) }}` |
 
-**The `score_threshold: 0.3` story.** This was one of the most painful debugging experiences in the project. The initial threshold was 0.45. Deployment resources score approximately 0.43 for deployment-related queries — just below the threshold. The failure was completely silent: Qdrant returned zero results, the LLM said "No indexed Kubernetes resources found", and there was no obvious error anywhere in the pipeline.
+**The `score_threshold: 0.3` story.** The initial threshold was 0.45. Deployment resources score approximately 0.43 for deployment-related queries — just below the threshold. The failure was completely silent: Qdrant returned zero results, the LLM said "No indexed Kubernetes resources found", and there was no obvious error anywhere in the pipeline.
 
-After systematic testing with different queries and inspecting raw scores, we discovered the scoring range for this embedding model on short Kubernetes metadata is 0.38–0.70. Setting the threshold to 0.3 captures everything relevant. The LLM's "only answer from retrieved context" instruction provides the guardrail against hallucinating from low-relevance results.
+After systematic testing, we discovered the scoring range for `nomic-embed-text` on Kubernetes metadata is 0.38–0.70. Setting the threshold to 0.3 captures everything relevant. The LLM's "only answer from retrieved context" instruction provides the guardrail against hallucinating from low-relevance results.
 
 **`limit: 30`** — a minimal kind cluster has ~35 resources. Retrieving up to 30 ensures broad questions like "list everything" can be answered comprehensively.
 
@@ -609,13 +927,15 @@ After systematic testing with different queries and inspecting raw scores, we di
 
 ### AI Node 4 — Build Prompt
 
+Press **Tab** → search **"code"** → select **Code**. Connect it to the Qdrant Search output.
+
+The most carefully engineered node in the system. Transforms raw Qdrant search results into a structured prompt the LLM can reason over.
+
 ![Build Prompt — Code node showing SYSTEM_PROMPT and context construction visible](screenshots/ai-node-04-build-prompt.png)
 
-**Node type:** `n8n-nodes-base.code` (JavaScript)
+**Configuration:**
 
-**What it does:** The most carefully engineered node in the system. Transforms raw Qdrant search results into a structured prompt the LLM can reason over. The INPUT panel on the left shows the Qdrant search results — every payload field (resource_uid, kind, api_version, namespace, name, labels, annotations, raw_spec_json) is visible, confirming exactly what the LLM will receive.
-
-**Full code:**
+Set **Language** to `JavaScript`. Paste:
 
 ```javascript
 const results = $json.result || [];
@@ -667,17 +987,17 @@ Retrieved 8 Kubernetes resources:
 User question: List all namespaces in the Kubernetes cluster
 ```
 
-**The "Never hallucinate" instruction is non-negotiable.** Without it, `qwen3:8b` will confidently invent Kubernetes resource names and configurations. With it — and the explicit "only answer from retrieved context" constraint — the model stays grounded. Ask about Redis when no Redis resources exist: the model says "No indexed Kubernetes resources found."
+**The "Never hallucinate" instruction is non-negotiable.** Without it, `qwen3:8b` will confidently invent Kubernetes resource names and configurations. With it — and the explicit "only answer from retrieved context" constraint — the model stays grounded.
 
 ---
 
 ### AI Node 5 — LLM Chat
 
+Press **Tab** → search **"http request"** → select **HTTP Request**. Connect it to the Build Prompt output.
+
+Sends the assembled prompt to `qwen3:8b` via Ollama's chat API and waits for the complete response.
+
 ![LLM Chat — POST to Ollama qwen3:8b, stream:false, temperature:0.1, think:false](screenshots/ai-node-05-llm-chat.png)
-
-**Node type:** `n8n-nodes-base.httpRequest`
-
-**What it does:** Sends the assembled prompt to `qwen3:8b` via Ollama's chat API and waits for the complete response.
 
 **Configuration:**
 
@@ -686,7 +1006,7 @@ User question: List all namespaces in the Kubernetes cluster
 | Method | `POST` |
 | URL | `http://host.docker.internal:11434/api/chat` |
 | Body Content Type | `JSON` |
-| JSON Body | see below |
+| JSON Body | (see below) |
 
 ```json
 ={{
@@ -709,17 +1029,21 @@ Three configuration decisions worth explaining:
 
 **`temperature: 0.1`** — Near-deterministic output. This is a factual lookup and formatting task, not creative writing. Low temperature produces consistent, accurate answers without randomness.
 
-**`think: false`** — `qwen3:8b` supports extended chain-of-thought reasoning (visible "thinking" tokens). This helps for math or logic problems. For retrieval and formatting tasks like ours, it adds 2–5 seconds of latency without improving quality. Disabling it makes the system noticeably faster.
+**`think: false`** — `qwen3:8b` supports extended chain-of-thought reasoning (visible "thinking" tokens). For retrieval and formatting tasks like ours, it adds 2–5 seconds of latency without improving quality. Disabling it makes the system noticeably faster.
 
 ---
 
 ### AI Node 6 — Format Response
 
+Press **Tab** → search **"code"** → select **Code**. Connect it to the LLM Chat output.
+
+Extracts the LLM's reply from Ollama's response envelope and returns it in the `output` field that n8n's Chat Trigger expects.
+
 ![Format Response — Code node extracting message.content from Ollama envelope](screenshots/ai-node-06-format-response.png)
 
-**Node type:** `n8n-nodes-base.code` (JavaScript)
+**Configuration:**
 
-**What it does:** Extracts the LLM's reply from Ollama's response envelope and returns it in the `output` field that n8n's Chat Trigger expects.
+Set **Language** to `JavaScript`. Paste:
 
 ```javascript
 const r    = $input.first().json;
@@ -729,11 +1053,16 @@ const text = r?.message?.content
 return [{ json: { output: text } }];
 ```
 
-Without this node, the Chat Trigger would receive the entire Ollama response envelope as the answer — a raw JSON blob. This node extracts just the text. The `|| r?.response` fallback handles both streaming and non-streaming response formats, making the node robust to Ollama API version changes.
+Without this node, the Chat Trigger would receive the entire Ollama response envelope as the answer — a raw JSON blob. The `|| r?.response` fallback handles both streaming and non-streaming response formats, making the node robust to Ollama API version changes.
 
 n8n's Chat Trigger automatically surfaces the top-level `output` field as the chat message sent back to the user.
 
----
+### Activate the AI Flow
+
+```bash
+docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=<AI_ID>
+docker restart kind_vector_n8n-n8n-1
+```
 
 ### The AI Flow in Action
 
@@ -749,11 +1078,15 @@ The user types a plain-English question.
 
 The response arrives as a structured markdown table containing real namespace data from the cluster — default, kube-system, kube-public, kube-node-lease, local-path-storage, and others — exactly as they exist in the kind cluster. No invented entries. No hallucinated namespaces.
 
+![AI workflow executions list — showing multiple successful runs](screenshots/12-ai-executions-list.png)
+
 ---
 
 ## Flow 3: Reset_K8s_Flow — On-Demand Re-indexing
 
 This utility flow solves a practical problem: sometimes you need to start completely fresh. New embedding model (incompatible vectors), cluster recreated, schema changed, or simply verifying the full pipeline from scratch. One HTTP call wipes Qdrant and triggers a complete re-index.
+
+**To create this flow:** In the n8n dashboard click **Add Workflow**, name it `Reset_K8s_Flow`, then add the five nodes described below.
 
 ![Reset_K8s_Flow canvas — 5 nodes in a straight line, Published](screenshots/15-reset-workflow-canvas.png)
 
@@ -763,11 +1096,9 @@ Five nodes, no branching, response mode set to `Last Node` so the caller waits f
 
 ### Reset Node 1 — Reset Webhook
 
+Press **Tab** → search **"webhook"** → select **Webhook**. This is the entry point.
+
 ![Reset Webhook — POST method, path k8s-reset, response mode Last Node](screenshots/reset-node-01-webhook.png)
-
-**Node type:** `n8n-nodes-base.webhook`
-
-**What it does:** Listens for `POST /webhook/k8s-reset` and triggers the rest of the flow. Holds the HTTP connection open until the final node responds.
 
 **Configuration:**
 
@@ -777,7 +1108,7 @@ Five nodes, no branching, response mode set to `Last Node` so the caller waits f
 | Path | `k8s-reset` |
 | Response Mode | `Last Node` |
 
-`Response Mode: Last Node` is key. The webhook holds the TCP connection open while Nodes 2–5 execute. The caller receives the JSON output from the Format Response node as the HTTP response body. This means you know exactly when the reset completed and what the status is.
+`Response Mode: Last Node` is key. The webhook holds the TCP connection open while Nodes 2–5 execute. The caller receives the JSON output from the Format Response node as the HTTP response body — so you know exactly when the reset completed.
 
 **How to trigger:**
 ```bash
@@ -789,11 +1120,11 @@ curl -s -X POST http://localhost:5678/webhook/k8s-reset \
 
 ### Reset Node 2 — Delete Qdrant Collection
 
+Press **Tab** → search **"http request"** → select **HTTP Request**. Connect it to the Webhook output.
+
+Drops the entire `k8s` collection — every vector, every payload, every index.
+
 ![Delete Qdrant Collection — DELETE method to qdrant:6333/collections/k8s](screenshots/reset-node-02-delete-collection.png)
-
-**Node type:** `n8n-nodes-base.httpRequest`
-
-**What it does:** Drops the entire `k8s` collection — every vector, every payload, every index. Irreversible, but the next two nodes recreate it immediately.
 
 **Configuration:**
 
@@ -810,11 +1141,11 @@ After this node executes, the collection does not exist. Any Qdrant queries betw
 
 ### Reset Node 3 — Recreate Qdrant Collection
 
+Press **Tab** → search **"http request"** → select **HTTP Request**. Connect it to the Delete output.
+
+Creates a fresh 768-dimensional Cosine similarity collection.
+
 ![Recreate Qdrant Collection — PUT with 768-dim Cosine schema](screenshots/reset-node-03-recreate-collection.png)
-
-**Node type:** `n8n-nodes-base.httpRequest`
-
-**What it does:** Creates a fresh 768-dimensional Cosine similarity collection with the exact schema that `nomic-embed-text` requires.
 
 **Configuration:**
 
@@ -833,11 +1164,11 @@ After this node executes, the collection does not exist. Any Qdrant queries betw
 
 ### Reset Node 4 — Trigger Resync
 
+Press **Tab** → search **"http request"** → select **HTTP Request**. Connect it to the Recreate output.
+
+Calls the k8s-watcher's `/resync` endpoint, which lists all nine tracked resource types and republishes every object as an ADDED event to Kafka.
+
 ![Trigger Resync — POST to k8s-watcher:8080/resync](screenshots/reset-node-04-trigger-resync.png)
-
-**Node type:** `n8n-nodes-base.httpRequest`
-
-**What it does:** Calls the k8s-watcher's `/resync` endpoint, which lists all nine tracked resource types from the Kubernetes API and republishes every object as an `ADDED` event to Kafka. The CDC flow picks these up and re-embeds them all into the fresh collection.
 
 **Configuration:**
 
@@ -854,11 +1185,15 @@ Note the internal container port `8080` (mapped to `8085` on the host in docker-
 
 ### Reset Node 5 — Format Response
 
+Press **Tab** → search **"code"** → select **Code**. Connect it to the Trigger Resync output.
+
+Constructs the confirmation JSON returned to the curl caller.
+
 ![Format Response — Code node returning status ok with reset_at timestamp](screenshots/reset-node-05-format-response.png)
 
-**Node type:** `n8n-nodes-base.code` (JavaScript)
+**Configuration:**
 
-**What it does:** Constructs the confirmation JSON returned to the curl caller.
+Set **Language** to `JavaScript`. Paste:
 
 ```javascript
 const ts = new Date().toISOString();
@@ -881,11 +1216,16 @@ return [{
 }
 ```
 
----
+### Activate the Reset Flow
+
+```bash
+docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=<RESET_ID>
+docker restart kind_vector_n8n-n8n-1
+```
 
 ### Reset Flow Execution History
 
-![Reset execution detail — 5 green nodes, 1 item flowing through each, completed in 59ms](screenshots/16-reset-workflow-executions.png)
+![Reset execution history — both runs completed under 100ms](screenshots/16-reset-workflow-executions.png)
 
 Both executions in the history completed in under 100ms — the fast completion is because the actual re-indexing work (embedding 35 resources) runs asynchronously in the k8s-watcher background thread after the workflow has already returned. The flow itself just clears the collection, recreates it, and fires the resync trigger.
 
@@ -902,13 +1242,13 @@ npm test
 ```
 
 ```
-  ✓  CDC: create namespace → Kafka event published + Qdrant insertion    (2.5s)
+  ✓  CDC: create namespace → Kafka event published + Qdrant insertion    (2.4s)
   ✓  CDC: update deployment → old vector replaced (dedup by resource_uid) (1.9s)
-  ✓  CDC: delete resource → point removed from Qdrant vector store         (36ms)
-  ✓  AI: namespace count query → structured markdown table response        (1.9s)
+  ✓  CDC: delete resource → point removed from Qdrant vector store         (33ms)
+  ✓  AI: namespace count query → structured markdown table response        (2.2s)
   ✓  Reset: POST /webhook/k8s-reset clears Qdrant and resync repopulates  (3.1s)
 
-  5 passed (9.9s)
+  5 passed (10.0s)
 ```
 
 **Test 1** creates a real Kubernetes namespace, waits for the Kafka offset to advance (confirming k8s-watcher published the event), embeds the namespace metadata, inserts it into Qdrant, and verifies the 768-dim vector and correct payload are present.
@@ -947,6 +1287,20 @@ Wiring the watcher directly to n8n's webhook endpoint is simpler but loses event
 
 ---
 
+## Troubleshooting
+
+| Symptom | Likely Cause | Fix |
+|---|---|---|
+| CDC flow not triggering | Containers stopped | `docker compose up -d` |
+| LLM returns "No indexed resources" | Qdrant has 0 points | `curl -X POST http://localhost:5678/webhook/k8s-reset` then wait 45s |
+| Workflow webhooks return 404 | Workflows not active | Re-import and run `n8n publish:workflow --id=...` |
+| Embedding scores all below 0.3 | embed_text format wrong | Verify natural-language sentence format in Parse Message node |
+| k8s-watcher exits | K8S_SERVER wrong | Update port in docker-compose.yml: `kubectl cluster-info` |
+| n8n activation fails via UI | n8n 2.6.4 basic-auth bug | Use `n8n publish:workflow` CLI only |
+| Ollama unreachable from Docker | host.docker.internal not set | Add `extra_hosts: ["host.docker.internal:host-gateway"]` to docker-compose.yml |
+
+---
+
 ## What This System Does Not Do (Yet)
 
 - **Custom Resource Definitions** — The watcher only monitors nine core resource types. CRDs require dynamic API group discovery.
@@ -962,7 +1316,7 @@ Everything in this article — Docker Compose configuration, the k8s-watcher Pyt
 
 **[github.com/a2z-ice/k8s-ai-knowledge-system](https://github.com/a2z-ice/k8s-ai-knowledge-system)**
 
-Clone it, run `docker compose up -d`, import the workflows, and you have a working local Kubernetes AI in under 10 minutes.
+Clone it, install prerequisites, run `docker compose up -d`, import the workflows, and you have a working local Kubernetes AI in under 15 minutes.
 
 ---
 

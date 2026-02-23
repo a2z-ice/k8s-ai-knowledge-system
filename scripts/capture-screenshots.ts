@@ -139,6 +139,7 @@ test('Capture all n8n UI screenshots', async () => {
     await page.locator('input[type="password"]').press('Enter');
     await page.waitForURL(u => !u.toString().includes('/signin'), { timeout: 15_000 });
     await page.waitForTimeout(2_000);
+    await snap(page, '02b-post-signin-landing.png');
     await page.keyboard.press('Escape');
     await page.waitForTimeout(500);
 
@@ -148,6 +149,77 @@ test('Capture all n8n UI screenshots', async () => {
     await page.waitForTimeout(2_000);
     await snap(page, '03-workflow-dashboard.png');
     await snap(page, '04-workflow-list-active-badges.png');
+
+    // ── Credentials page ────────────────────────────────────────────────────
+    console.log('\n[Creds] Credentials page...');
+    await page.goto(`${N8N}/credentials`, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(2_000);
+    await snap(page, 'cred-01-credentials-list.png');
+
+    // ── Workflow creation process ────────────────────────────────────────────
+    console.log('\n[Create] Blank workflow canvas...');
+    await page.goto(`${N8N}/workflow/new`, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(3_000);
+    await snap(page, 'create-01-blank-canvas.png');
+
+    // Open node creator — Tab is the canonical shortcut in n8n 2.x
+    console.log('[Create] Opening node creator...');
+    await page.keyboard.press('Tab');
+    await page.waitForTimeout(1_500);
+
+    // Verify node creator opened; if not, try clicking the canvas "+" button
+    const nodeCreator = page.locator('[data-test-id="node-creator"]');
+    if (!await nodeCreator.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      const addBtn = page.locator('[data-test-id="canvas-add-button"], button[aria-label*="add"], .add-node-button').first();
+      if (await addBtn.isVisible({ timeout: 2_000 }).catch(() => false)) {
+        await addBtn.click();
+        await page.waitForTimeout(1_500);
+      }
+    }
+    await snap(page, 'create-02-node-creator-open.png');
+
+    // Search for each node type used in our flows
+    const searches: Array<[string, string]> = [
+      ['kafka trigger',   'create-03-search-kafka-trigger.png'],
+      ['http request',    'create-04-search-http-request.png'],
+      ['code',            'create-05-search-code.png'],
+      ['if',              'create-06-search-if.png'],
+      ['webhook',         'create-07-search-webhook.png'],
+      ['chat trigger',    'create-08-search-chat-trigger.png'],
+    ];
+
+    // Try multiple selector strategies for the search input
+    const searchSel = [
+      '[data-test-id="node-creator"] input[type="text"]',
+      '[data-test-id="node-creator-search-bar"] input',
+      '.node-creator input[type="text"]',
+      'input[placeholder*="Search"]',
+      'input[placeholder*="search"]',
+    ].join(', ');
+    const searchInput = page.locator(searchSel).first();
+
+    if (await searchInput.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      for (const [term, filename] of searches) {
+        await searchInput.fill('');
+        await searchInput.fill(term);
+        await page.waitForTimeout(800);
+        await snap(page, filename);
+      }
+    } else {
+      console.log('    ✗ node-creator search input not found — skipping search screenshots');
+      await snap(page, 'create-03-search-kafka-trigger.png'); // at least grab state
+    }
+
+    // Leave canvas without saving — navigate away
+    await page.goto(`${N8N}/home/workflows`, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(1_500);
+
+    // Dismiss "unsaved changes" dialog if it appears
+    const discardBtn = page.locator('button:has-text("Discard"), button:has-text("Leave"), button:has-text("Don\'t save")').first();
+    if (await discardBtn.isVisible({ timeout: 2_000 }).catch(() => false)) {
+      await discardBtn.click();
+      await page.waitForTimeout(1_000);
+    }
 
     // ══════════════════════════════════════════════════════════════════════════
     // CDC_K8s_Flow
