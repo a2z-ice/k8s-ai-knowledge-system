@@ -91,6 +91,12 @@ kind_vector_n8n/
 docker compose -f docker-compose.yml up -d
 ```
 
+### Install test dependencies (first time only)
+```bash
+npm install
+npx playwright install chromium
+```
+
 ### Run E2E tests
 ```bash
 npm test                           # all 5 tests
@@ -99,7 +105,8 @@ npm run test:single "create namespace"   # single test by name
 
 ### Capture UI screenshots
 ```bash
-npm run screenshots                # saves to docs/screenshots/
+N8N_EMAIL=you@example.com N8N_PASS=yourpassword npm run screenshots
+# saves to docs/screenshots/
 ```
 
 ### Reimport and reactivate workflows (after editing workflow JSON)
@@ -110,6 +117,7 @@ docker cp workflows/n8n_reset_k8s_flow.json kind_vector_n8n-n8n-1:/tmp/
 docker exec kind_vector_n8n-n8n-1 n8n import:workflow --input=/tmp/n8n_cdc_k8s_flow.json
 docker exec kind_vector_n8n-n8n-1 n8n import:workflow --input=/tmp/n8n_ai_k8s_flow.json
 docker exec kind_vector_n8n-n8n-1 n8n import:workflow --input=/tmp/n8n_reset_k8s_flow.json
+# If IDs changed after re-import, discover them: docker exec kind_vector_n8n-n8n-1 n8n list:workflow
 docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=sLFyTfSNzFIiVC9t
 docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=5cf0evFgopkFXM7q
 docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=JItVx5wVu0WTIvkA
@@ -126,6 +134,9 @@ curl -X PUT http://localhost:6333/collections/k8s \
 ### Create kind cluster (first-time setup only)
 ```bash
 kind create cluster --name k8s-ai
+# After creation, find the API server port and update K8S_SERVER in docker-compose.yml:
+kubectl --context kind-k8s-ai cluster-info | grep "control plane"
+# e.g. https://127.0.0.1:PORT → set K8S_SERVER: https://host.docker.internal:PORT
 ```
 
 ### Pull Ollama models (host machine, not Docker)
@@ -172,6 +183,8 @@ POST /webhook/k8s-reset
   → Format Response {status, message, reset_at}
 ```
 
+k8s-watcher watches 9 resource types: Namespace, Pod, Service, ConfigMap, PVC, Deployment, ReplicaSet, StatefulSet, DaemonSet. Each runs in its own thread with auto-restart on error.
+
 k8s-watcher also exposes `GET http://localhost:8085/healthz` → `{"status":"ok"}`
 
 ### Qdrant vector schema
@@ -210,8 +223,16 @@ Collection `k8s`, 768-dim Cosine. Point ID = `resource_uid` (UUID from k8s). Pay
 - **n8n 2.6.4 known bug:** `N8N_BASIC_AUTH_ACTIVE=true` causes body-parser to reject all POST/PATCH requests to `/rest/*`. Workflow activation must use `n8n publish:workflow` CLI, not the REST API or browser UI.
 - Qdrant score threshold is **0.3** — `nomic-embed-text` scores in the 0.38–0.70 range for k8s metadata. Deployment resources score ~0.43 for deployment-related queries; the previous 0.45 threshold silently filtered them out, causing "No results" LLM responses. 0.3 ensures all resource types are included.
 
+## Known Operational Patterns
+
+- **Containers stop between sessions** — Docker containers (especially n8n, qdrant, kafka) can stop when the host sleeps or Docker restarts. Always run `docker compose up -d` at the start of a session if anything looks wrong. k8s-watcher has `restart: unless-stopped` and usually survives, but the others do not.
+- **Workflow active status** — `n8n list:workflow` does NOT show the active flag. The reliable check is webhook HTTP codes: AI chat (`/webhook/k8s-ai-chat/chat`) and Reset (`/webhook/k8s-reset`) must return 200. If they return 404, workflows are inactive — run `/reimport-workflows`.
+- **Qdrant repopulation after reset** — After `POST /webhook/k8s-reset`, Qdrant is empty for ~30–45 seconds while k8s-watcher republishes all resources. Do not run E2E tests until points_count ≥ 10.
+- **20s startup wait** — After `docker compose up -d`, wait at least 20 seconds before probing Qdrant, Kafka, or n8n endpoints.
+
 ## Resolved Implementation Decisions
 
-- **k8s-watcher replaces Debezium** — `k8s-watcher/watcher.py` watches the K8s API directly. The original Debezium etcd connector approach was incorrect (etcd is not MongoDB). `infra/connectors/debezium_k8s_connector.json` is kept for reference only.
+- **k8s-watcher replaces Debezium** — `k8s-watcher/watcher.py` watches the K8s API directly. The original Debezium etcd connector approach was incorrect (etcd is not MongoDB). `infra/connectors/debezium_k8s_connector.json` is kept for reference only. The `debezium` service in docker-compose.yml still runs but is unused.
+- **K8S_SERVER must match kind cluster port** — `docker-compose.yml` has a hardcoded port (`https://host.docker.internal:PORT`). If you recreate the kind cluster, update this to match the new API server port (`kubectl --context kind-k8s-ai cluster-info`).
 - **Debezium image:** `quay.io/debezium/connect:3.0` — Docker Hub `debezium/connect:latest` is deprecated.
 - **Embedding format:** natural language sentence (`"Kubernetes {kind} named {name} in namespace {ns}. Labels: ..."`) gives significantly better cosine similarity than terse `kind:X name:Y` format.
