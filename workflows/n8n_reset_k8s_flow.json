@@ -1,4 +1,5 @@
 {
+  "id": "k8sRSTflow00001",
   "name": "Reset_K8s_Flow",
   "nodes": [
     {
@@ -12,7 +13,10 @@
       "name": "Reset Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 1,
-      "position": [180, 300],
+      "position": [
+        180,
+        300
+      ],
       "webhookId": "k8s-reset"
     },
     {
@@ -25,7 +29,10 @@
       "name": "Delete Qdrant Collection",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [400, 300]
+      "position": [
+        400,
+        300
+      ]
     },
     {
       "parameters": {
@@ -40,7 +47,10 @@
       "name": "Recreate Qdrant Collection",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [620, 300]
+      "position": [
+        620,
+        300
+      ]
     },
     {
       "parameters": {
@@ -52,7 +62,10 @@
       "name": "Trigger Resync",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [840, 300]
+      "position": [
+        840,
+        300
+      ]
     },
     {
       "parameters": {
@@ -62,21 +75,56 @@
       "name": "Format Response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1060, 300]
+      "position": [
+        1060,
+        300
+      ]
     }
   ],
   "connections": {
     "Reset Webhook": {
-      "main": [[{ "node": "Delete Qdrant Collection", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Delete Qdrant Collection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Delete Qdrant Collection": {
-      "main": [[{ "node": "Recreate Qdrant Collection", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Recreate Qdrant Collection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Recreate Qdrant Collection": {
-      "main": [[{ "node": "Trigger Resync", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Trigger Resync",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Trigger Resync": {
-      "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {

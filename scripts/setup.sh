@@ -13,7 +13,7 @@
 set -euo pipefail
 
 # ── colours ─────────────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\\033[1;33m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 log()  { echo -e "${BLUE}[$(date +%H:%M:%S)]${NC} $*"; }
@@ -280,11 +280,14 @@ for _i in $(seq 1 30); do
 done
 ok "n8n stopped"
 
-# 10b. Delete existing workflow rows to avoid duplicates (sqlite3 is safe now)
+# 10b. Delete existing workflow rows to avoid duplicates (sqlite3 is safe now).
+#      We delete both by name and by the known static IDs embedded in the JSON files
+#      so that a re-run after a partial failure also cleans up correctly.
 if [[ -n "${SQLITE3_BIN}" && -f "${N8N_DB}" ]]; then
   log "Removing existing workflow rows (credentials and encryption key preserved) …"
   "${SQLITE3_BIN}" "${N8N_DB}" \
-    "DELETE FROM workflow_entity WHERE name IN ('CDC_K8s_Flow','AI_K8s_Flow','Reset_K8s_Flow');" \
+    "DELETE FROM workflow_entity WHERE name IN ('CDC_K8s_Flow','AI_K8s_Flow','Reset_K8s_Flow')
+        OR id IN ('k8sCDCflow00001','k8sAIflow000001','k8sRSTflow00001');" \
     2>/dev/null || true
   # Clean up orphaned shared_workflow rows
   "${SQLITE3_BIN}" "${N8N_DB}" \
@@ -402,37 +405,31 @@ n8n_exec n8n import:workflow --input=/tmp/n8n_ai_k8s_flow.json
 n8n_exec n8n import:workflow --input=/tmp/n8n_reset_k8s_flow.json
 ok "Workflows imported"
 
-# 10f. Discover IDs (n8n has no python3, so export to host and parse there)
-log "Discovering workflow IDs …"
+# 10f. Workflow IDs — these are the static IDs embedded in the workflow JSON files.
+#      n8n import:workflow uses the 'id' field from the JSON (required since n8n 1.x).
+CDC_ID="k8sCDCflow00001"
+AI_ID="k8sAIflow000001"
+RESET_ID="k8sRSTflow00001"
+
+# Verify the IDs are actually present in the DB after import
+log "Verifying imported workflow IDs …"
 EXPORT_TMP="/tmp/k8s-ai-n8n-export-$$.json"
 n8n_exec sh -c "n8n export:workflow --all --output=/tmp/n8n-all-workflows.json 2>/dev/null; true"
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" \
   cp "${N8N_POD}:/tmp/n8n-all-workflows.json" "${EXPORT_TMP}" 2>/dev/null
-
-_get_id() {
-  python3 -c "
+python3 - "${EXPORT_TMP}" << 'PYEOF'
 import json, sys
-name = sys.argv[1]
+path = sys.argv[1]
 try:
-    with open('${EXPORT_TMP}') as f:
+    with open(path) as f:
         data = json.load(f)
     items = data if isinstance(data, list) else [data]
-    matches = [wf['id'] for wf in items if wf.get('name') == name]
-    if matches:
-        print(matches[-1])
+    for wf in items:
+        print(f"  {wf.get('name','?')} → {wf.get('id','?')}")
 except Exception as e:
-    sys.stderr.write(str(e) + '\n')
-" "$1"
-}
-
-CDC_ID=$(_get_id "CDC_K8s_Flow")
-AI_ID=$(_get_id "AI_K8s_Flow")
-RESET_ID=$(_get_id "Reset_K8s_Flow")
+    print(f"  (could not parse export: {e})", file=sys.stderr)
+PYEOF
 rm -f "${EXPORT_TMP}"
-
-[[ -n "${CDC_ID}" ]]   || die "Could not determine CDC workflow ID"
-[[ -n "${AI_ID}" ]]    || die "Could not determine AI workflow ID"
-[[ -n "${RESET_ID}" ]] || die "Could not determine Reset workflow ID"
 
 ok "CDC workflow ID:   ${CDC_ID}"
 ok "AI workflow ID:    ${AI_ID}"
@@ -451,6 +448,37 @@ kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout restart deployment/n8n
 wait_for_rollout deployment n8n 120
 ok "n8n restarted and Ready"
 
+# 10i. Wait for CDC Kafka consumer group to become active before triggering resync.
+#      The Kafka Trigger uses autoOffsetReset=latest — it only processes messages
+#      published AFTER the consumer subscribes. Calling the reset webhook before
+#      the consumer is active causes all resync messages to be missed, leaving
+#      Qdrant empty. We poll the Kafka consumer-groups CLI until the group appears.
+log "Waiting for CDC consumer group 'n8n-cdc-consumer' to become active …"
+KAFKA_POD=$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" \
+  get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+CONSUMER_ACTIVE=false
+DEADLINE=$((SECONDS + 120))
+while [[ ${SECONDS} -lt ${DEADLINE} ]]; do
+  if kubectl --context "${CONTEXT}" -n "${NAMESPACE}" \
+       exec "${KAFKA_POD}" -- \
+       kafka-consumer-groups --bootstrap-server localhost:9092 \
+       --describe --group n8n-cdc-consumer 2>/dev/null \
+     | grep -q "n8n-cdc-consumer"; then
+    CONSUMER_ACTIVE=true
+    break
+  fi
+  echo -n "."
+  sleep 5
+done
+echo
+if [[ "${CONSUMER_ACTIVE}" == "true" ]]; then
+  ok "CDC consumer group active"
+  # Brief extra buffer so all partition assignments stabilise
+  sleep 5
+else
+  warn "CDC consumer group did not appear within 120s — resync may not populate Qdrant"
+fi
+
 # ── step 11: wait for qdrant repopulation ────────────────────────────────────
 step "Waiting for Qdrant to be populated by k8s-watcher"
 
@@ -458,8 +486,26 @@ step "Waiting for Qdrant to be populated by k8s-watcher"
 # The CDC workflow (autoOffsetReset=latest) only processes NEW messages, so it
 # won't replay historical Kafka messages on restart.
 log "Triggering /webhook/k8s-reset to seed Qdrant …"
-RESET_RESP=$(curl -sf -X POST "http://localhost:30000/webhook/k8s-reset" \
-  -H "Content-Type: application/json" -d '{}' 2>/dev/null || echo '{}')
+RESET_ATTEMPTS=0
+RESET_RESP=""
+while [[ ${RESET_ATTEMPTS} -lt 5 ]]; do
+  RESET_HTTP=$(curl -s -o /tmp/reset_resp_$$.json -w "%{http_code}" \
+    -X POST "http://localhost:30000/webhook/k8s-reset" \
+    -H "Content-Type: application/json" -d '{}' 2>/dev/null || echo "000")
+  RESET_RESP=$(cat /tmp/reset_resp_$$.json 2>/dev/null || echo '{}')
+  rm -f /tmp/reset_resp_$$.json
+  if [[ "${RESET_HTTP}" == "200" ]]; then
+    ok "Reset webhook responded HTTP 200"
+    break
+  fi
+  RESET_ATTEMPTS=$((RESET_ATTEMPTS + 1))
+  warn "Reset webhook returned HTTP ${RESET_HTTP} (attempt ${RESET_ATTEMPTS}/5) — retrying in 10s …"
+  sleep 10
+done
+if [[ "${RESET_HTTP}" != "200" ]]; then
+  warn "Reset webhook still not returning 200 — workflows may not be active"
+  warn "Run /reimport-workflows to recover"
+fi
 echo "${RESET_RESP}" | python3 -c "import sys,json; d=json.load(sys.stdin); print('  status:', d.get('status','?'), '| reset_at:', d.get('reset_at','?')[:19])" 2>/dev/null || true
 
 log "Polling Qdrant points_count (target ≥ 10, timeout 120s) …"
@@ -518,10 +564,17 @@ if [[ "${RUN_TESTS}" == "true" ]]; then
   log "Ensuring Qdrant has ≥ 10 points before tests …"
   POINTS=$(qdrant_points)
   if [[ "${POINTS}" -lt 10 ]]; then
-    warn "Only ${POINTS} points — triggering reset and waiting 60s …"
+    warn "Only ${POINTS} points — triggering reset and polling …"
     curl -s -X POST "http://localhost:30000/webhook/k8s-reset" \
       -H "Content-Type: application/json" -d '{}' >/dev/null 2>&1 || true
-    sleep 60
+    PRE_TEST_DEADLINE=$((SECONDS + 90))
+    while [[ ${SECONDS} -lt ${PRE_TEST_DEADLINE} ]]; do
+      POINTS=$(qdrant_points)
+      [[ "${POINTS}" -ge 10 ]] && break
+      echo -n "  points=${POINTS} … "
+      sleep 5
+    done
+    echo
     POINTS=$(qdrant_points)
   fi
   log "Qdrant points: ${POINTS}"

@@ -470,6 +470,16 @@ Use the internal Kubernetes service hostname `kafka` (not `localhost`) — n8n r
 
 ### Option A: Import from JSON (Recommended)
 
+The fastest path is the setup script, which handles everything automatically — credential injection, deduplication, import, activation, and E2E test verification:
+
+```bash
+./scripts/setup.sh --keep-cluster   # cluster already running
+# or
+./scripts/setup.sh                  # full from-scratch setup
+```
+
+For a manual import when the cluster is already running:
+
 ```bash
 # Get the n8n pod name
 N8N_POD=$(kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=n8n \
@@ -480,24 +490,20 @@ kubectl --context kind-k8s-ai -n k8s-ai cp workflows/n8n_cdc_k8s_flow.json   ${N
 kubectl --context kind-k8s-ai -n k8s-ai cp workflows/n8n_ai_k8s_flow.json    ${N8N_POD}:/tmp/
 kubectl --context kind-k8s-ai -n k8s-ai cp workflows/n8n_reset_k8s_flow.json ${N8N_POD}:/tmp/
 
-# Import them
+# Import them (IDs are static — embedded in the JSON files)
 kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_cdc_k8s_flow.json
 kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_ai_k8s_flow.json
 kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_reset_k8s_flow.json
 
-# Find the assigned IDs
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n list:workflow
-# id:sLFyTfSNzFIiVC9t  name:CDC_K8s_Flow
-# id:5cf0evFgopkFXM7q  name:AI_K8s_Flow
-# id:JItVx5wVu0WTIvkA  name:Reset_K8s_Flow
-
-# Activate all three workflows
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=sLFyTfSNzFIiVC9t
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=5cf0evFgopkFXM7q
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=JItVx5wVu0WTIvkA
+# Activate all three (IDs are fixed — no discovery step needed)
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sCDCflow00001
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sAIflow000001
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sRSTflow00001
 kubectl --context kind-k8s-ai -n k8s-ai rollout restart deployment/n8n
 kubectl --context kind-k8s-ai -n k8s-ai rollout status deployment/n8n --timeout=60s
 ```
+
+> **Static workflow IDs:** The JSON files contain a hardcoded `id` field (`k8sCDCflow00001`, `k8sAIflow000001`, `k8sRSTflow00001`). Modern n8n (1.x+) uses this field on import — omitting it causes `SQLITE_CONSTRAINT: NOT NULL constraint failed: workflow_entity.id`.
 
 > **Known n8n 2.6.4 bug:** `N8N_BASIC_AUTH_ACTIVE=true` causes the body-parser middleware to reject all `POST /rest/*` requests. The browser UI toggle and REST API both fail silently. The only reliable way to activate workflows is `n8n publish:workflow` via the CLI inside the container.
 
@@ -582,9 +588,9 @@ Under **Add option**, also add:
 
 | Option | Value |
 |---|---|
-| Auto Offset Reset | `earliest` |
+| Auto Offset Reset | `latest` |
 
-Setting `Auto Offset Reset: earliest` means on first start the flow processes the full topic history — critical if n8n starts after the watcher has already published events.
+Setting `Auto Offset Reset: latest` means the flow only processes messages published **after** the workflow starts — it does not replay historical Kafka messages on each n8n restart. This is intentional: the Reset flow (`POST /webhook/k8s-reset`) is the correct way to rebuild Qdrant from scratch. Using `earliest` would cause CDC to replay the entire topic history on every n8n restart, filling Qdrant with stale duplicate points and breaking the Reset E2E test (which expects Qdrant to be empty immediately after reset).
 
 **Why Kafka and not a direct webhook?** Consumer group offset tracking means if n8n restarts, it resumes exactly where it left off. No events are lost. No polling loops. If the watcher publishes events faster than n8n processes them, Kafka absorbs the backpressure.
 

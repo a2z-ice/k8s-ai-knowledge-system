@@ -54,7 +54,7 @@ kind_vector_n8n/
 ├── infra/
 │   ├── kind-config.yaml             # kind cluster config (extraPortMappings + extraMounts)
 │   ├── schemas/qdrant_k8s_collection_schema.json
-│   ├── connectors/debezium_k8s_connector.json  # kept for reference only
+│   ├── connectors/debezium_k8s_connector.json  # kept for reference only (approach abandoned)
 │   └── k8s/                         # Kubernetes manifests
 │       ├── 00-namespace.yaml
 │       ├── 01-pvs.yaml              # 3 hostPath PVs (n8n, qdrant, kafka)
@@ -144,44 +144,7 @@ N8N_EMAIL=you@example.com N8N_PASS=yourpassword npm run screenshots
 
 ### Reimport and reactivate workflows (after editing workflow JSON)
 
-The safest method is to run `./scripts/setup.sh --keep-cluster` — it handles deduplication and ID discovery automatically.
-
-For a manual reimport (when the cluster is already running):
-```bash
-# Use setup.sh with --keep-cluster --no-test for a clean reimport
-./scripts/setup.sh --keep-cluster --no-test
-
-# Or reimport manually (WARNING: creates duplicate workflows if the old rows are not deleted first)
-N8N_POD=$(kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=n8n -o jsonpath='{.items[0].metadata.name}')
-kubectl --context kind-k8s-ai -n k8s-ai cp workflows/n8n_cdc_k8s_flow.json   ${N8N_POD}:/tmp/
-kubectl --context kind-k8s-ai -n k8s-ai cp workflows/n8n_ai_k8s_flow.json    ${N8N_POD}:/tmp/
-kubectl --context kind-k8s-ai -n k8s-ai cp workflows/n8n_reset_k8s_flow.json ${N8N_POD}:/tmp/
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_cdc_k8s_flow.json
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_ai_k8s_flow.json
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_reset_k8s_flow.json
-# Discover IDs after import (IDs are generated at import time — they are NOT static):
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n export:workflow --all --output=/tmp/wf.json 2>/dev/null
-kubectl --context kind-k8s-ai -n k8s-ai cp ${N8N_POD}:/tmp/wf.json /tmp/wf.json
-python3 -c "import json; [print(w['name'], '->', w['id']) for w in json.load(open('/tmp/wf.json'))]"
-# Then publish using the discovered IDs:
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=<CDC_ID>
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=<AI_ID>
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=<RESET_ID>
-kubectl --context kind-k8s-ai -n k8s-ai rollout restart deployment/n8n
-```
-
-### Create Qdrant collection (first-time setup only)
-```bash
-curl -X PUT http://localhost:30001/collections/k8s \
-  -H 'Content-Type: application/json' \
-  -d @infra/schemas/qdrant_k8s_collection_schema.json
-```
-
-### Create kind cluster (first-time setup only)
-```bash
-kind create cluster --config infra/kind-config.yaml
-kubectl --context kind-k8s-ai get nodes   # wait for Ready
-```
+**Always use `setup.sh --keep-cluster --no-test`** — it handles deduplication, ID discovery, and activation automatically. Do not `kubectl cp` + `n8n import:workflow` manually without first deleting the old rows from sqlite3, as `n8n import:workflow` always creates a new row with a fresh ID rather than overwriting by name.
 
 ### Build and load k8s-watcher image into kind
 ```bash
@@ -251,9 +214,9 @@ Collection `k8s`, 768-dim Cosine. Point ID = `resource_uid` (UUID from k8s). Pay
 | HTTP Basic Auth | admin / admin |
 | Owner email | assaduzzaman.ict@gmail.com |
 | Owner password | admin@123Normal |
-| CDC workflow ID | generated at import — discover with `n8n export:workflow --all` |
-| AI workflow ID | generated at import — discover with `n8n export:workflow --all` |
-| Reset workflow ID | generated at import — discover with `n8n export:workflow --all` |
+| CDC workflow ID | `k8sCDCflow00001` (static — embedded in JSON) |
+| AI workflow ID | `k8sAIflow000001` (static — embedded in JSON) |
+| Reset workflow ID | `k8sRSTflow00001` (static — embedded in JSON) |
 | AI public chat URL | http://n8n.genai.prod:30000/webhook/k8s-ai-chat/chat |
 | Reset endpoint | POST http://localhost:30000/webhook/k8s-reset |
 | k8s-watcher health | http://localhost:30002/healthz (host) / http://k8s-watcher:8080/healthz (in-cluster) |
@@ -293,17 +256,15 @@ Collection `k8s`, 768-dim Cosine. Point ID = `resource_uid` (UUID from k8s). Pay
 - **Qdrant repopulation after reset** — After `POST /webhook/k8s-reset`, Qdrant is empty for ~30–45 seconds while k8s-watcher republishes all resources. Do not run E2E tests until points_count ≥ 10.
 - **30s startup wait** — After applying manifests, wait at least 30 seconds before probing Qdrant, Kafka, or n8n endpoints.
 
-## Resolved Implementation Decisions
+## Non-Obvious Implementation Details
 
-- **k8s-watcher replaces Debezium** — `k8s-watcher/watcher.py` watches the K8s API directly. The original Debezium etcd connector approach was incorrect (etcd is not MongoDB). `infra/connectors/debezium_k8s_connector.json` is kept for reference only.
-- **Debezium removed** — The `debezium` service has been deleted from `docker-compose.yml`. The connector JSON is kept for reference only.
-- **k8s-watcher uses in-cluster config** — `watcher.py` detects `KUBERNETES_SERVICE_HOST` env var (auto-set in every k8s pod) and calls `config.load_incluster_config()`. Falls back to kubeconfig for local dev.
-- **No K8S_SERVER needed** — In-cluster config uses the ServiceAccount token and internal API server address automatically. No `KUBECONFIG` or `K8S_SERVER` env vars needed in the k8s Deployment.
 - **Embedding format:** natural language sentence (`"Kubernetes {kind} named {name} in namespace {ns}. Labels: ..."`) gives significantly better cosine similarity than terse `kind:X name:Y` format.
 - **Static PV binding** — `storageClassName: ""` + `claimRef` pre-binds each PV to its specific PVC, preventing accidental cross-binding.
 - **Kafka `enableServiceLinks: false`** — Kubernetes auto-injects `KAFKA_PORT=tcp://...` into pods from the `kafka` ClusterIP Service. The CP Kafka startup script parses all `KAFKA_*` env vars and chokes on this URL-format value. Fixed by `enableServiceLinks: false` in the StatefulSet pod spec.
 - **Kafka + n8n initContainers** — Both use `busybox` initContainers to `chown -R 1000:1000` their data directories. Docker wrote these as root; both services run as uid 1000 in Kubernetes.
-- **Workflow ID deduplication** — `n8n import:workflow` always creates a new workflow with a fresh ID; it does NOT overwrite by name. `setup.sh` handles this by: (1) scaling n8n to 0 replicas first (safe for sqlite3 ops), (2) deleting workflow_entity rows by name before importing, (3) discovering the newly-created IDs via `n8n export:workflow --all`, and (4) publishing by the discovered IDs. Workflow IDs are **not static** — they change on every fresh import.
+- **Workflow IDs are now static** — each workflow JSON has a hardcoded `id` field (`k8sCDCflow00001`, `k8sAIflow000001`, `k8sRSTflow00001`). n8n uses the `id` from the JSON on import (required in n8n 1.x+ — importing without an `id` causes `SQLITE_CONSTRAINT: NOT NULL`). `setup.sh` step 10b deletes existing rows by both name and ID before re-importing, preventing duplicates.
 - **n8n SQLite DB safety** — Direct sqlite3 writes MUST be done only when n8n is scaled to 0 replicas. Concurrent writes corrupt the database (`SQLITE_CORRUPT`). Protocol: `scale --replicas=0` → wait for pod termination → sqlite3 ops → `scale --replicas=1`.
 - **n8n credential encryption** — n8n uses OpenSSL-compatible AES-256-CBC (`EVP_BytesToKey` / MD5 key derivation) for credential encryption. Format: `base64("Salted__" + 8-byte-salt + AES-CBC-ciphertext)`. See the Python implementation in `scripts/setup.sh` step 10c. The encryption key lives in `data/n8n/config` (persists across `database.sqlite` deletions).
 - **CDC Kafka `autoOffsetReset: latest`** — The Kafka Trigger in CDC_K8s_Flow uses `autoOffsetReset: latest`. This ensures the CDC consumer only processes messages published after the workflow starts — it does NOT replay historical Kafka messages on each startup. Changing this to `earliest` causes CDC to replay the entire topic history on every n8n restart, filling Qdrant with stale/duplicate points and breaking E2E test 5 (which expects Qdrant to be empty immediately after reset).
+- **`obj.kind` is always None in k8s-watcher** — The k8s Python client watch stream doesn't populate `obj.kind`. All Qdrant entries have `kind=null` in their payload. The `embed_text` is still correct (watcher builds it from the resource type string), but the `kind` payload field is null — don't rely on it for filtering.
+- **E2E test 4 limit=50** — Uses limit 50 (not 20) to ensure cluster-scoped resources rank in top results despite `kind=null` lowering their semantic similarity score.

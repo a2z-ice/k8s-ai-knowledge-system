@@ -1,7 +1,7 @@
 # Manual Test Guide — Kubernetes AI Knowledge System
 
-**Version:** 1.6
-**Date:** 2026-02-23
+**Version:** 1.7
+**Date:** 2026-02-24
 **Environment:** macOS · Docker Desktop · kind v0.24+ · n8n (latest) · All services in-cluster (k8s-ai namespace)
 
 Complete step-by-step verification of the Kubernetes AI Knowledge System — from infrastructure health through to live CDC event observation and AI query validation in the n8n browser UI. Every command and browser step has been verified against the live running environment.
@@ -46,10 +46,10 @@ Expected output at the end:
   Qdrant             : http://localhost:30001
   k8s-watcher health : http://localhost:30002/healthz
 
-  Workflow IDs (save these):
-    CDC   = <generated-id>
-    AI    = <generated-id>
-    Reset = <generated-id>
+  Workflow IDs (static — embedded in JSON):
+    CDC   = k8sCDCflow00001
+    AI    = k8sAIflow000001
+    Reset = k8sRSTflow00001
 ```
 
 ### 0.2 Re-setup without recreating the cluster (fastest path after editing workflows)
@@ -465,7 +465,7 @@ Double-click the **Kafka Trigger** node. Confirm:
 Click **Executions** in the left sidebar, or navigate to:
 
 ```
-http://localhost:30000/workflow/sLFyTfSNzFIiVC9t/executions
+http://localhost:30000/workflow/k8sCDCflow00001/executions
 ```
 
 ![CDC execution history — one row per Kafka message processed](screenshots/06-cdc-executions-list.png)
@@ -501,7 +501,7 @@ This section performs a live end-to-end CDC cycle observable in the n8n executio
 Navigate to:
 
 ```
-http://localhost:30000/workflow/sLFyTfSNzFIiVC9t/executions
+http://localhost:30000/workflow/k8sCDCflow00001/executions
 ```
 
 ### F2. Create a Kubernetes Namespace
@@ -562,7 +562,7 @@ Watch the execution list — a new row appears for the `DELETED` event. In the d
 Navigate back to the workflow list and click **AI_K8s_Flow**, or go directly to:
 
 ```
-http://localhost:30000/workflow/5cf0evFgopkFXM7q
+http://localhost:30000/workflow/k8sAIflow000001
 ```
 
 ![AI workflow canvas — 6-node query pipeline](screenshots/08-ai-workflow-canvas.png)
@@ -661,7 +661,7 @@ Is there an n8n deployment in the k8s-ai namespace?
 After sending any query via the public chat, switch to the n8n UI and navigate to the AI execution list:
 
 ```
-http://localhost:30000/workflow/5cf0evFgopkFXM7q/executions
+http://localhost:30000/workflow/k8sAIflow000001/executions
 ```
 
 ![AI execution list showing chat queries processed](screenshots/12-ai-executions-list.png)
@@ -818,9 +818,9 @@ Expected:
 - Kafka: same offset (hostPath PV at `./data/kafka` persisted)
 - n8n logs:
   ```
-  Activated workflow "CDC_K8s_Flow" (ID: sLFyTfSNzFIiVC9t)
-  Activated workflow "AI_K8s_Flow" (ID: 5cf0evFgopkFXM7q)
-  Activated workflow "Reset_K8s_Flow" (ID: JItVx5wVu0WTIvkA)
+  Activated workflow "CDC_K8s_Flow" (ID: k8sCDCflow00001)
+  Activated workflow "AI_K8s_Flow" (ID: k8sAIflow000001)
+  Activated workflow "Reset_K8s_Flow" (ID: k8sRSTflow00001)
   ```
 
 ---
@@ -966,9 +966,9 @@ Reactivate via CLI (the n8n 2.6.4 body-parser bug prevents REST API activation w
 
 ```bash
 N8N_POD=$(kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=n8n -o jsonpath='{.items[0].metadata.name}')
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=sLFyTfSNzFIiVC9t
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=5cf0evFgopkFXM7q
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=JItVx5wVu0WTIvkA
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sCDCflow00001
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sAIflow000001
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sRSTflow00001
 kubectl --context kind-k8s-ai -n k8s-ai rollout restart deployment/n8n
 ```
 
@@ -1025,7 +1025,7 @@ If 404 → run `/reimport-workflows`:
 N8N_POD=$(kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=n8n -o jsonpath='{.items[0].metadata.name}')
 kubectl --context kind-k8s-ai -n k8s-ai cp workflows/n8n_ai_k8s_flow.json ${N8N_POD}:/tmp/
 kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_ai_k8s_flow.json
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=5cf0evFgopkFXM7q
+kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sAIflow000001
 kubectl --context kind-k8s-ai -n k8s-ai rollout restart deployment/n8n
 ```
 
