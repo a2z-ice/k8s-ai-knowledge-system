@@ -13,7 +13,7 @@ Project-specific slash commands are in `.claude/commands/`. Use them to quickly 
 | `/start-services` | Apply k8s manifests and verify all components are healthy |
 | `/reset-db` | Wipe Qdrant vector DB and trigger CDC resync via `/webhook/k8s-reset` |
 | `/reimport-workflows` | Reimport + reactivate all 3 n8n workflows from local JSON files |
-| `/test` | Run all 5 E2E tests (`npm test`) with prerequisite checks and failure diagnosis |
+| `/test` | Run all 7 E2E tests (`npm test`) with prerequisite checks and failure diagnosis |
 | `/screenshots` | Capture all UI screenshots (`npm run screenshots`) and list output |
 
 ---
@@ -26,7 +26,8 @@ All plans are stored in `docs/plans/` with an incrementing index prefix:
 docs/plans/
   1. Kubernetes AI Knowledge System.md
   2. Kubernetes In-Cluster Migration.md
-  3. <next plan title>.md
+  3. Add Secret Resource Watching.md
+  4. <next plan title>.md
 ```
 
 When starting a new significant piece of work, create the next numbered plan file before implementing.
@@ -130,11 +131,11 @@ npx playwright install chromium
 
 ### Run E2E tests
 ```bash
-npm test                           # all 5 tests
+npm test                           # all 7 tests
 npm run test:single "create namespace"   # single test by name
 ```
 
-**E2E test design:** Tests 1–4 simulate CDC processing inline (embed + upsert directly to Qdrant) — they do NOT depend on n8n workflows being active. Test 5 (`Reset`) does require the n8n reset webhook. If tests 1–4 pass but test 5 fails with 404, run `/reimport-workflows`.
+**E2E test design:** Tests 1–4 and 6–7 simulate CDC processing inline (embed + upsert directly to Qdrant) — they do NOT depend on n8n workflows being active. Test 5 (`Reset`) does require the n8n reset webhook. If tests 1–4 pass but test 5 fails with 404, run `/reimport-workflows`. Tests 6–7 cover Secret watching: Test 6 verifies Kafka offset advances and Qdrant stores only safe Secret metadata (no values), Test 7 verifies the AI query pipeline surfaces Secret names without exposing raw values.
 
 ### Capture UI screenshots
 ```bash
@@ -196,7 +197,7 @@ POST /webhook/k8s-reset
   → Format Response {status, message, reset_at}
 ```
 
-k8s-watcher watches 9 resource types: Namespace, Pod, Service, ConfigMap, PVC, Deployment, ReplicaSet, StatefulSet, DaemonSet. Each runs in its own thread with auto-restart on error.
+k8s-watcher watches 10 resource types: Namespace, Pod, Service, ConfigMap, PVC, Secret, Deployment, ReplicaSet, StatefulSet, DaemonSet. Each runs in its own thread with auto-restart on error. For Secrets, only safe metadata is stored (`type` and `dataKeys` list) — base64-encoded values are never published to Kafka or Qdrant.
 
 k8s-watcher also exposes `GET http://localhost:30002/healthz` → `{"status":"ok"}` (NodePort 30002)
 
@@ -266,5 +267,6 @@ Collection `k8s`, 768-dim Cosine. Point ID = `resource_uid` (UUID from k8s). Pay
 - **n8n SQLite DB safety** — Direct sqlite3 writes MUST be done only when n8n is scaled to 0 replicas. Concurrent writes corrupt the database (`SQLITE_CORRUPT`). Protocol: `scale --replicas=0` → wait for pod termination → sqlite3 ops → `scale --replicas=1`.
 - **n8n credential encryption** — n8n uses OpenSSL-compatible AES-256-CBC (`EVP_BytesToKey` / MD5 key derivation) for credential encryption. Format: `base64("Salted__" + 8-byte-salt + AES-CBC-ciphertext)`. See the Python implementation in `scripts/setup.sh` step 10c. The encryption key lives in `data/n8n/config` (persists across `database.sqlite` deletions).
 - **CDC Kafka `autoOffsetReset: latest`** — The Kafka Trigger in CDC_K8s_Flow uses `autoOffsetReset: latest`. This ensures the CDC consumer only processes messages published after the workflow starts — it does NOT replay historical Kafka messages on each startup. Changing this to `earliest` causes CDC to replay the entire topic history on every n8n restart, filling Qdrant with stale/duplicate points and breaking E2E test 5 (which expects Qdrant to be empty immediately after reset).
-- **`obj.kind` is always None in k8s-watcher** — The k8s Python client watch stream doesn't populate `obj.kind`. All Qdrant entries have `kind=null` in their payload. The `embed_text` is still correct (watcher builds it from the resource type string), but the `kind` payload field is null — don't rely on it for filtering.
+- **`obj.kind` is always None in k8s-watcher** — The k8s Python client watch stream doesn't populate `obj.kind`, and `raw.get("kind", "")` is also empty. `obj_to_payload` resolves this via `kind = obj.kind or raw.get("kind", "") or kind_hint`, where `kind_hint` is the resource type label passed by both `watch_stream` and `resync_all`. The `kind` payload field is correctly set; the `embed_text` is also correct ("Kubernetes Secret named ..."). Do not call `obj_to_payload` without passing `kind_hint`.
+- **Secret-safe spec in k8s-watcher** — When `kind == "Secret"`, `obj_to_payload` replaces the spec with `{"type": raw.get("type", "Opaque"), "dataKeys": list(raw.get("data", {}).keys())}`. The base64-encoded values in `raw["data"]` are discarded. This applies to both `watch_stream` and `resync_all`.
 - **E2E test 4 limit=50** — Uses limit 50 (not 20) to ensure cluster-scoped resources rank in top results despite `kind=null` lowering their semantic similarity score.

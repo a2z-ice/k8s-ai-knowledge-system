@@ -6,6 +6,9 @@
  *   2. Update deployment → old vector replaced (dedup by resource_uid)
  *   3. Delete resource  → point removed from Qdrant
  *   4. AI query        → structured markdown table response
+ *   5. Reset           → Qdrant cleared + CDC resync repopulates
+ *   6. CDC Secret      → Secret event in Kafka + Qdrant (safe metadata only, no values)
+ *   7. AI secrets query → Secret metadata returned, values never exposed
  *
  * The tests exercise the full pipeline:
  *   k8s API → k8s-watcher → Kafka → (CDC processing) → Qdrant → Ollama LLM
@@ -122,6 +125,43 @@ async function qdrantUpsert(
   expect(ins.ok(), `Qdrant upsert failed: ${ins.status()}`).toBeTruthy();
 }
 
+/**
+ * Wait until Qdrant points_count is stable (unchanged for `stableMs` ms).
+ *
+ * Why this is needed for Test 4:
+ *   Test 1 creates AND asynchronously deletes a namespace.  Kubernetes
+ *   terminates child resources (ServiceAccounts, ConfigMaps …) after the
+ *   test returns, generating a burst of Kafka events.  n8n CDC processes
+ *   each ADDED/MODIFIED event by calling Ollama nomic-embed-text.  Because
+ *   OLLAMA_NUM_PARALLEL=1, those embed calls serialize with Test 4's own
+ *   embed + LLM calls, causing Test 4 to hang until n8n's queue drains.
+ *
+ *   Waiting here until Qdrant is stable means all n8n CDC embed→insert
+ *   cycles have completed and Ollama's queue is empty before Test 4 begins.
+ */
+async function waitForQdrantStable(
+  request: APIRequestContext,
+  stableMs = 5_000,
+  maxMs    = 60_000,
+): Promise<void> {
+  let lastCount = -1;
+  let stableSince = 0;
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    const resp = await request.get(`${QDRANT}/collections/k8s`);
+    if (resp.ok()) {
+      const count: number = (await resp.json()).result?.points_count ?? -1;
+      if (count !== lastCount) {
+        lastCount = count;
+        stableSince = Date.now();
+      } else if (lastCount >= 0 && Date.now() - stableSince >= stableMs) {
+        return; // stable for stableMs → n8n CDC queue drained
+      }
+    }
+    await sleep(2_000);
+  }
+}
+
 /** Fetch a single Qdrant point by id; returns null if not found. */
 async function qdrantGet(request: APIRequestContext, uid: string) {
   const resp = await request.get(`${QDRANT}/collections/k8s/points/${uid}`);
@@ -228,6 +268,12 @@ test('CDC: delete resource → point removed from Qdrant vector store', async ({
 
 // ── Test 4: AI query → markdown table ────────────────────────────────────────
 test('AI: namespace count query → structured markdown table response', async ({ request }) => {
+  // Drain n8n CDC's Ollama queue before issuing our own embed + LLM calls.
+  // Test 1's namespace lifecycle (create + async delete) triggers delayed
+  // Kafka events; n8n CDC processes each with an Ollama embed call that
+  // serialises with ours (OLLAMA_NUM_PARALLEL=1) and causes a hang.
+  await waitForQdrantStable(request);
+
   const QUERY = 'How many namespaces exist in the Kubernetes cluster and how many resources per namespace?';
 
   // 1. Embed query
@@ -290,6 +336,110 @@ Rules:
   expect(answer.toLowerCase()).not.toMatch(/redis/);
   expect(answer.toLowerCase()).not.toMatch(/mongodb/);
   expect(answer.toLowerCase()).not.toMatch(/postgres/);
+});
+
+// ── Test 6: CDC Secret ────────────────────────────────────────────────────────
+test('CDC: create secret → Kafka event published + Qdrant insertion (safe metadata only)', async ({ request }) => {
+  const SECRET_NAME = 'e2e-test-secret';
+
+  // Remove any leftover from a previous run
+  try { kubectl(['-n', K8S_NAMESPACE, 'delete', 'secret', SECRET_NAME, '--ignore-not-found', '--wait=false']); } catch { /* ok */ }
+  await sleep(500);
+
+  const offsetBefore = kafkaOffset();
+
+  // 1. Create a secret with sensitive data in k8s-ai namespace
+  kubectl(['-n', K8S_NAMESPACE, 'create', 'secret', 'generic', SECRET_NAME,
+    '--from-literal=username=admin', '--from-literal=password=supersecret123']);
+  const uid = kubectl(['-n', K8S_NAMESPACE, 'get', 'secret', SECRET_NAME,
+    '-o', 'jsonpath={.metadata.uid}']);
+  expect(uid, 'secret uid must be non-empty').toBeTruthy();
+
+  // 2. Verify k8s-watcher published an ADDED event to Kafka
+  const offsetAfter = await waitForKafkaEvent(offsetBefore, 10_000);
+  expect(offsetAfter, 'Kafka offset must advance after secret creation')
+    .toBeGreaterThan(offsetBefore);
+
+  // 3. CDC processing: embed + upsert safe Secret metadata into Qdrant
+  //    specJson reflects the safe spec that watcher.py produces for Secrets
+  const safeSpec = JSON.stringify({ type: 'Opaque', dataKeys: ['password', 'username'] });
+  await qdrantUpsert(request, uid, 'Secret', K8S_NAMESPACE, SECRET_NAME, {}, safeSpec, new Date().toISOString());
+
+  // 4. Verify the point is in Qdrant with kind=Secret and no secret values
+  const point = await qdrantGet(request, uid);
+  expect(point, 'Qdrant must contain the new secret').not.toBeNull();
+  expect(point.payload.kind).toBe('Secret');
+  expect(point.payload.name).toBe(SECRET_NAME);
+  expect(point.payload.namespace).toBe(K8S_NAMESPACE);
+  expect(point.vector).toHaveLength(768);
+
+  // Must NOT store raw secret values
+  const payloadStr = JSON.stringify(point.payload);
+  expect(payloadStr, 'Qdrant payload must not contain raw secret value "supersecret123"')
+    .not.toContain('supersecret123');
+
+  // Cleanup
+  kubectl(['-n', K8S_NAMESPACE, 'delete', 'secret', SECRET_NAME, '--ignore-not-found', '--wait=false']);
+});
+
+// ── Test 7: AI secrets query ──────────────────────────────────────────────────
+test('AI: secrets query → returns Secret metadata without exposing values', async ({ request }) => {
+  const QUERY = 'What secrets exist in the kube-system namespace?';
+
+  // 1. Embed query
+  const vector = await embed(request, QUERY);
+  expect(vector).toHaveLength(768);
+
+  // 2. Search Qdrant for Secret resources
+  const searchResp = await request.post(`${QDRANT}/collections/k8s/points/search`, {
+    data: { vector, limit: 20, with_payload: true, score_threshold: 0.3 },
+  });
+  expect(searchResp.ok()).toBeTruthy();
+  const results: Array<{ id: string; score: number; payload: Record<string, unknown> }> =
+    (await searchResp.json()).result;
+  expect(results.length, 'Qdrant must return results for the secrets query').toBeGreaterThan(0);
+
+  // 3. Verify at least 1 Secret from kube-system is present in the results
+  const secretResults = results.filter(r => r.payload.kind === 'Secret' && r.payload.namespace === 'kube-system');
+  expect(secretResults.length, 'At least 1 kube-system Secret must appear in search results')
+    .toBeGreaterThan(0);
+
+  // 4. Build prompt and call LLM (matches n8n AI flow logic)
+  const SYSTEM = `You are an expert Kubernetes AI assistant integrated with a RAG system.
+Rules:
+- ONLY answer based on the retrieved context. Never hallucinate cluster state.
+- If context is empty, respond: "No indexed Kubernetes resources found in vector database."
+- List secret names and their types but NEVER expose data values. Do not expose resource_uid values.
+- Be concise and technical.`;
+
+  const ctx = results.map((r, i) =>
+    `[${i + 1}] kind=${r.payload.kind}  name=${r.payload.name}  ns=${r.payload.namespace || '(cluster)'}  score=${r.score.toFixed(3)}`
+  ).join('\n');
+  const userMsg = `Retrieved ${results.length} resources:\n\n${ctx}\n\nQuestion: ${QUERY}`;
+
+  const chatResp = await request.post(`${OLLAMA}/api/chat`, {
+    data: {
+      model: CHAT_MODEL,
+      messages: [
+        { role: 'system', content: SYSTEM },
+        { role: 'user',   content: userMsg },
+      ],
+      stream: false,
+      think: false,
+      options: { temperature: 0.1 },
+    },
+  });
+  expect(chatResp.ok(), `Ollama /api/chat failed: ${chatResp.status()}`).toBeTruthy();
+
+  const answer: string = (await chatResp.json())?.message?.content ?? '';
+  expect(answer, 'LLM must return a non-empty response').toBeTruthy();
+
+  // 5. Assert response mentions secrets (bootstrap-token is a standard kube-system secret)
+  expect(answer.toLowerCase(), 'response must mention "secret"').toMatch(/secret/);
+  expect(answer.toLowerCase(), 'response must mention "kube-system"').toMatch(/kube-system/);
+
+  // Must NOT expose raw secret values — the LLM only receives key names, not values
+  expect(answer, 'LLM response must not expose raw secret values').not.toMatch(/supersecret/);
 });
 
 // ── Test 5: Reset REST endpoint ───────────────────────────────────────────────

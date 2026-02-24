@@ -69,11 +69,11 @@ def make_producer() -> KafkaProducer:
     raise RuntimeError(f"Cannot connect to Kafka at {KAFKA_BOOTSTRAP}")
 
 
-def obj_to_payload(event_type: str, obj) -> dict:
+def obj_to_payload(event_type: str, obj, kind_hint: str = "") -> dict:
     meta = obj.metadata
     raw = obj.to_dict()
     spec = raw.get("spec") or {}
-    kind = obj.kind or raw.get("kind", "")
+    kind = obj.kind or raw.get("kind", "") or kind_hint
     namespace = meta.namespace or ""
     name = meta.name or ""
     labels = meta.labels or {}
@@ -82,6 +82,14 @@ def obj_to_payload(event_type: str, obj) -> dict:
         for k, v in (meta.annotations or {}).items()
         if not k.startswith("kubectl.kubernetes.io/last-applied")
     }
+
+    # For Secrets: expose type and key names only — never the base64-encoded values
+    if kind == "Secret":
+        spec = {
+            "type": raw.get("type", "Opaque"),
+            "dataKeys": list((raw.get("data") or {}).keys()),
+        }
+
     spec_json = json.dumps(spec, default=str)[:4000]
 
     # Natural-language embed text improves semantic similarity for RAG queries.
@@ -119,7 +127,7 @@ def watch_stream(list_fn, label: str, producer: KafkaProducer):
                 obj = event["object"]
                 if not obj.metadata or not obj.metadata.uid:
                     continue
-                payload = obj_to_payload(event["type"], obj)
+                payload = obj_to_payload(event["type"], obj, kind_hint=label)
                 producer.send(KAFKA_TOPIC, payload)
                 log.info(
                     "%-9s %-20s ns=%-18s uid=%s",
@@ -144,6 +152,7 @@ def resync_all(v1: client.CoreV1Api, apps: client.AppsV1Api, producer: KafkaProd
         (v1.list_service_for_all_namespaces,                  "Service"),
         (v1.list_config_map_for_all_namespaces,               "ConfigMap"),
         (v1.list_persistent_volume_claim_for_all_namespaces,  "PVC"),
+        (v1.list_secret_for_all_namespaces,                   "Secret"),
         (apps.list_deployment_for_all_namespaces,             "Deployment"),
         (apps.list_replica_set_for_all_namespaces,            "ReplicaSet"),
         (apps.list_stateful_set_for_all_namespaces,           "StatefulSet"),
@@ -156,7 +165,7 @@ def resync_all(v1: client.CoreV1Api, apps: client.AppsV1Api, producer: KafkaProd
             for obj in items:
                 if not obj.metadata or not obj.metadata.uid:
                     continue
-                payload = obj_to_payload("ADDED", obj)
+                payload = obj_to_payload("ADDED", obj, kind_hint=label)
                 producer.send(KAFKA_TOPIC, payload)
                 total += 1
             log.info("Resync: published %d %s resources", len(items), label)
@@ -225,15 +234,16 @@ def main():
     start_resync_server(v1, apps, producer)
 
     watchers = [
-        (v1.list_namespace,                              "Namespace"),
-        (v1.list_pod_for_all_namespaces,                 "Pod"),
-        (v1.list_service_for_all_namespaces,             "Service"),
-        (v1.list_config_map_for_all_namespaces,          "ConfigMap"),
-        (v1.list_persistent_volume_claim_for_all_namespaces, "PVC"),
-        (apps.list_deployment_for_all_namespaces,        "Deployment"),
-        (apps.list_replica_set_for_all_namespaces,       "ReplicaSet"),
-        (apps.list_stateful_set_for_all_namespaces,      "StatefulSet"),
-        (apps.list_daemon_set_for_all_namespaces,        "DaemonSet"),
+        (v1.list_namespace,                                   "Namespace"),
+        (v1.list_pod_for_all_namespaces,                      "Pod"),
+        (v1.list_service_for_all_namespaces,                  "Service"),
+        (v1.list_config_map_for_all_namespaces,               "ConfigMap"),
+        (v1.list_persistent_volume_claim_for_all_namespaces,  "PVC"),
+        (v1.list_secret_for_all_namespaces,                   "Secret"),
+        (apps.list_deployment_for_all_namespaces,             "Deployment"),
+        (apps.list_replica_set_for_all_namespaces,            "ReplicaSet"),
+        (apps.list_stateful_set_for_all_namespaces,           "StatefulSet"),
+        (apps.list_daemon_set_for_all_namespaces,             "DaemonSet"),
     ]
 
     threads = []
@@ -246,7 +256,7 @@ def main():
         t.start()
         threads.append(t)
 
-    log.info("Watching %d resource types on topic '%s'", len(threads), KAFKA_TOPIC)
+    log.info("Watching %d resource types on topic '%s' (Secrets: key names only)", len(threads), KAFKA_TOPIC)
     for t in threads:
         t.join()
 

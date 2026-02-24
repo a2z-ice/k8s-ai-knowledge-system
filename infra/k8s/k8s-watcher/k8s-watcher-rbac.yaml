@@ -10,7 +10,7 @@ metadata:
   name: k8s-watcher
 rules:
   - apiGroups: [""]
-    resources: ["namespaces", "pods", "services", "configmaps", "persistentvolumeclaims"]
+    resources: ["namespaces", "pods", "services", "configmaps", "persistentvolumeclaims", "secrets"]
     verbs: ["list", "watch"]
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
