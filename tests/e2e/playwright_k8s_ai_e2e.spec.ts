@@ -28,11 +28,11 @@ import { test, expect, APIRequestContext } from '@playwright/test';
 import { execFileSync } from 'child_process';
 
 // ── constants ─────────────────────────────────────────────────────────────────
-const N8N     = 'http://localhost:30000';
-const QDRANT  = 'http://localhost:30001';
+const N8N     = 'http://localhost:31000';
+const QDRANT  = 'http://localhost:31001';
 const OLLAMA  = 'http://localhost:11434';
 const KAFKA_TOPIC = 'k8s-resources';
-const K8S_CONTEXT = 'kind-k8s-ai';
+const K8S_CONTEXT = 'kind-k8s-ai-classic';
 const K8S_NAMESPACE = 'k8s-ai';
 const EMBED_MODEL = 'nomic-embed-text';
 const CHAT_MODEL  = 'qwen3:8b';

@@ -1,17 +1,17 @@
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
-name: k8s-ai
+name: k8s-ai-classic
 nodes:
   - role: control-plane
     extraPortMappings:
-      - containerPort: 30000
-        hostPort: 30000
+      - containerPort: 31000
+        hostPort: 31000
         protocol: TCP
-      - containerPort: 30001
-        hostPort: 30001
+      - containerPort: 31001
+        hostPort: 31001
         protocol: TCP
-      - containerPort: 30002
-        hostPort: 30002
+      - containerPort: 31002
+        hostPort: 31002
         protocol: TCP
     extraMounts:
       - hostPath: /Volumes/Other/rand/kind_vector_n8n/data

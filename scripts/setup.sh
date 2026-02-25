@@ -25,8 +25,8 @@ step() { echo -e "\n${BOLD}${CYAN}━━━ $* ━━━${NC}"; }
 # ── constants ────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-CLUSTER_NAME="k8s-ai"
-CONTEXT="kind-k8s-ai"
+CLUSTER_NAME="k8s-ai-classic"
+CONTEXT="kind-k8s-ai-classic"
 NAMESPACE="k8s-ai"
 KEEP_CLUSTER=false
 RUN_TESTS=true
@@ -68,7 +68,7 @@ n8n_exec() {
 }
 
 qdrant_points() {
-  curl -sf "http://localhost:30001/collections/k8s" 2>/dev/null \
+  curl -sf "http://localhost:31001/collections/k8s" 2>/dev/null \
     | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['result']['points_count'])" \
     2>/dev/null || echo "0"
 }
@@ -120,10 +120,10 @@ fi
 # ── step 2: check for port conflicts ────────────────────────────────────────
 # Skip port check when reusing existing cluster — the ports are already held by kind
 if [[ "${KEEP_CLUSTER}" == "false" ]]; then
-  step "Checking port availability (30000–30002)"
+  step "Checking port availability (31000–31002)"
 
   CONFLICTING=()
-  for port in 30000 30001 30002; do
+  for port in 31000 31001 31002; do
     if lsof -iTCP:"${port}" -sTCP:LISTEN -t &>/dev/null 2>&1; then
       CONFLICTING+=("localhost:${port}")
     fi
@@ -131,14 +131,14 @@ if [[ "${KEEP_CLUSTER}" == "false" ]]; then
 
   if [[ ${#CONFLICTING[@]} -gt 0 ]]; then
     warn "Ports in use: ${CONFLICTING[*]}"
-    warn "Another process is listening on one of the required ports (30000/30001/30002)."
+    warn "Another process is listening on one of the required ports (31000/31001/31002)."
     warn "Identify and stop it, then re-run this script."
-    warn "  Example: lsof -iTCP:30000 -sTCP:LISTEN"
+    warn "  Example: lsof -iTCP:31000 -sTCP:LISTEN"
     die  "Port conflict — cannot bind kind NodePorts"
   fi
-  ok "Ports 30000/30001/30002 are free"
+  ok "Ports 31000/31001/31002 are free"
 else
-  step "Checking port availability (30000–30002)"
+  step "Checking port availability (31000–31002)"
   ok "Skipped — reusing existing cluster (--keep-cluster)"
 fi
 
@@ -184,11 +184,11 @@ ok "Node is Ready"
 log "Verifying NodePort mappings …"
 PORTBINDINGS=$(docker inspect "${CLUSTER_NAME}-control-plane" \
   --format '{{json .HostConfig.PortBindings}}' 2>/dev/null)
-for port in 30000 30001 30002; do
+for port in 31000 31001 31002; do
   echo "${PORTBINDINGS}" | grep -q "\"${port}/tcp\"" \
     || die "Port ${port} not mapped in kind node — recreate cluster without --keep-cluster"
 done
-ok "NodePort mappings confirmed: 30000/30001/30002"
+ok "NodePort mappings confirmed: 31000/31001/31002"
 
 # ── step 5: kubernetes manifests ────────────────────────────────────────────
 step "Applying Kubernetes manifests"
@@ -212,11 +212,11 @@ ok "Qdrant is Running"
 step "Building k8s-watcher image"
 
 log "docker build …"
-docker build -t k8s-watcher:latest "${PROJECT_ROOT}/k8s-watcher/" --quiet
-ok "Image built: k8s-watcher:latest"
+docker build -t k8s-watcher-classic:latest "${PROJECT_ROOT}/k8s-watcher/" --quiet
+ok "Image built: k8s-watcher-classic:latest"
 
 log "Loading image into kind cluster …"
-kind load docker-image k8s-watcher:latest --name "${CLUSTER_NAME}"
+kind load docker-image k8s-watcher-classic:latest --name "${CLUSTER_NAME}"
 ok "Image loaded into cluster"
 
 log "Deploying k8s-watcher …"
@@ -240,7 +240,7 @@ echo
 step "Qdrant collection"
 
 log "Checking if collection 'k8s' exists …"
-COLLECTION_STATUS=$(curl -sf "http://localhost:30001/collections/k8s" 2>/dev/null \
+COLLECTION_STATUS=$(curl -sf "http://localhost:31001/collections/k8s" 2>/dev/null \
   | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','error'))" \
   2>/dev/null || echo "error")
 
@@ -248,7 +248,7 @@ if [[ "${COLLECTION_STATUS}" == "ok" ]]; then
   ok "Collection 'k8s' already exists — skipping creation"
 else
   log "Creating Qdrant collection 'k8s' (768-dim Cosine) …"
-  RESULT=$(curl -sf -X PUT "http://localhost:30001/collections/k8s" \
+  RESULT=$(curl -sf -X PUT "http://localhost:31001/collections/k8s" \
     -H "Content-Type: application/json" \
     -d @"${PROJECT_ROOT}/infra/schemas/qdrant_k8s_collection_schema.json")
   echo "${RESULT}" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d.get('result')==True, d" \
@@ -490,7 +490,7 @@ RESET_ATTEMPTS=0
 RESET_RESP=""
 while [[ ${RESET_ATTEMPTS} -lt 5 ]]; do
   RESET_HTTP=$(curl -s -o /tmp/reset_resp_$$.json -w "%{http_code}" \
-    -X POST "http://localhost:30000/webhook/k8s-reset" \
+    -X POST "http://localhost:31000/webhook/k8s-reset" \
     -H "Content-Type: application/json" -d '{}' 2>/dev/null || echo "000")
   RESET_RESP=$(cat /tmp/reset_resp_$$.json 2>/dev/null || echo '{}')
   rm -f /tmp/reset_resp_$$.json
@@ -542,12 +542,12 @@ check_endpoint() {
   fi
 }
 
-check_endpoint "n8n healthz"         "http://localhost:30000/healthz"
-check_endpoint "Qdrant healthz"      "http://localhost:30001/healthz"
-check_endpoint "k8s-watcher healthz" "http://localhost:30002/healthz"
+check_endpoint "n8n healthz"         "http://localhost:31000/healthz"
+check_endpoint "Qdrant healthz"      "http://localhost:31001/healthz"
+check_endpoint "k8s-watcher healthz" "http://localhost:31002/healthz"
 
 CHAT_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-  "http://localhost:30000/webhook/k8s-ai-chat/chat" \
+  "http://localhost:31000/webhook/k8s-ai-chat/chat" \
   -H "Content-Type: application/json" \
   -d '{"chatInput":"ping"}' 2>/dev/null || echo "000")
 if [[ "${CHAT_CODE}" == "200" ]]; then
@@ -565,7 +565,7 @@ if [[ "${RUN_TESTS}" == "true" ]]; then
   POINTS=$(qdrant_points)
   if [[ "${POINTS}" -lt 10 ]]; then
     warn "Only ${POINTS} points — triggering reset and polling …"
-    curl -s -X POST "http://localhost:30000/webhook/k8s-reset" \
+    curl -s -X POST "http://localhost:31000/webhook/k8s-reset" \
       -H "Content-Type: application/json" -d '{}' >/dev/null 2>&1 || true
     PRE_TEST_DEADLINE=$((SECONDS + 90))
     while [[ ${SECONDS} -lt ${PRE_TEST_DEADLINE} ]]; do
@@ -590,11 +590,11 @@ echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━�
 echo -e "${BOLD}${GREEN}  Setup complete!${NC}"
 echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo
-echo -e "  n8n dashboard      : ${CYAN}http://localhost:30000${NC}"
-echo -e "  n8n (domain)       : ${CYAN}http://n8n.genai.prod:30000${NC}  ← requires /etc/hosts"
-echo -e "  AI chat            : ${CYAN}http://localhost:30000/webhook/k8s-ai-chat/chat${NC}"
-echo -e "  Qdrant             : ${CYAN}http://localhost:30001${NC}"
-echo -e "  k8s-watcher health : ${CYAN}http://localhost:30002/healthz${NC}"
+echo -e "  n8n dashboard      : ${CYAN}http://localhost:31000${NC}"
+echo -e "  n8n (domain)       : ${CYAN}http://n8n.genai.prod:31000${NC}  ← requires /etc/hosts"
+echo -e "  AI chat            : ${CYAN}http://localhost:31000/webhook/k8s-ai-chat/chat${NC}"
+echo -e "  Qdrant             : ${CYAN}http://localhost:31001${NC}"
+echo -e "  k8s-watcher health : ${CYAN}http://localhost:31002/healthz${NC}"
 echo
 echo -e "  Workflow IDs (save these):"
 echo -e "    CDC   = ${BOLD}${CDC_ID}${NC}"

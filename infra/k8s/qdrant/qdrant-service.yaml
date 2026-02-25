@@ -24,5 +24,5 @@ spec:
     - name: http
       port: 6333
       targetPort: 6333
-      nodePort: 30001
+      nodePort: 31001
   type: NodePort

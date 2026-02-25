@@ -69,7 +69,7 @@ User question
                         │  K8s Watch API (streaming, 9 resource types)
                         ▼
               ┌─────────────────────┐
-              │    k8s-watcher      │  Python, k8s-ai pod, NodePort 30002
+              │    k8s-watcher      │  Python, k8s-ai pod, NodePort 31002
               │    9 watch threads  │  /healthz · /resync
               └──────────┬──────────┘
                          │  ADDED | MODIFIED | DELETED events (JSON)
@@ -87,7 +87,7 @@ User question
   └────────────────────────────┬─────────────────────────────────┘
                                ▼
                       ┌─────────────────┐
-                      │     Qdrant      │  768-dim Cosine, NodePort 30001
+                      │     Qdrant      │  768-dim Cosine, NodePort 31001
                       │  collection: k8s│  ID = resource_uid (K8s UUID)
                       └────────┬────────┘
                                │
@@ -271,18 +271,18 @@ npx playwright install chromium
 
 ### Create the kind Cluster
 
-The cluster is created with a custom config that wires NodePorts (30000–30002) through to your host and mounts the `./data` directory inside the cluster node for persistent storage:
+The cluster is created with a custom config that wires NodePorts (31000–31002) through to your host and mounts the `./data` directory inside the cluster node for persistent storage:
 
 ```bash
 kind create cluster --config infra/kind-config.yaml
 ```
 
-This creates a single-node cluster named `k8s-ai` with three host-port mappings. kubectl context `kind-k8s-ai` is added automatically.
+This creates a single-node cluster named `k8s-ai-classic` with three host-port mappings. kubectl context `kind-k8s-ai-classic` is added automatically.
 
 ```bash
-kubectl --context kind-k8s-ai get nodes
+kubectl --context kind-k8s-ai-classic get nodes
 # NAME                  STATUS   ROLES           AGE   VERSION
-# k8s-ai-control-plane  Ready    control-plane   30s   v1.32.x
+# k8s-ai-classic-control-plane  Ready    control-plane   30s   v1.32.x
 ```
 
 ### Deploy All Services to Kubernetes
@@ -291,32 +291,32 @@ All four services (n8n, Qdrant, Kafka, k8s-watcher) run as pods inside the `k8s-
 
 ```bash
 # Namespace and persistent volumes (cluster-scoped)
-kubectl --context kind-k8s-ai apply -f infra/k8s/00-namespace.yaml
-kubectl --context kind-k8s-ai apply -f infra/k8s/01-pvs.yaml
+kubectl --context kind-k8s-ai-classic apply -f infra/k8s/00-namespace.yaml
+kubectl --context kind-k8s-ai-classic apply -f infra/k8s/01-pvs.yaml
 
 # Kafka (n8n CDC depends on it — deploy first)
-kubectl --context kind-k8s-ai apply -f infra/k8s/kafka/
-kubectl --context kind-k8s-ai -n k8s-ai rollout status statefulset/kafka --timeout=120s
+kubectl --context kind-k8s-ai-classic apply -f infra/k8s/kafka/
+kubectl --context kind-k8s-ai-classic -n k8s-ai rollout status statefulset/kafka --timeout=120s
 
 # Qdrant
-kubectl --context kind-k8s-ai apply -f infra/k8s/qdrant/
-kubectl --context kind-k8s-ai -n k8s-ai rollout status deployment/qdrant --timeout=60s
+kubectl --context kind-k8s-ai-classic apply -f infra/k8s/qdrant/
+kubectl --context kind-k8s-ai-classic -n k8s-ai rollout status deployment/qdrant --timeout=60s
 
 # k8s-watcher (build image first, then load into kind)
-docker build -t k8s-watcher:latest ./k8s-watcher/
-kind load docker-image k8s-watcher:latest --name k8s-ai
-kubectl --context kind-k8s-ai apply -f infra/k8s/k8s-watcher/
-kubectl --context kind-k8s-ai -n k8s-ai rollout status deployment/k8s-watcher --timeout=90s
+docker build -t k8s-watcher-classic:latest ./k8s-watcher/
+kind load docker-image k8s-watcher-classic:latest --name k8s-ai-classic
+kubectl --context kind-k8s-ai-classic apply -f infra/k8s/k8s-watcher/
+kubectl --context kind-k8s-ai-classic -n k8s-ai rollout status deployment/k8s-watcher --timeout=90s
 
 # n8n
-kubectl --context kind-k8s-ai apply -f infra/k8s/n8n/
-kubectl --context kind-k8s-ai -n k8s-ai rollout status deployment/n8n --timeout=120s
+kubectl --context kind-k8s-ai-classic apply -f infra/k8s/n8n/
+kubectl --context kind-k8s-ai-classic -n k8s-ai rollout status deployment/n8n --timeout=120s
 ```
 
 Wait for all pods to reach `Running` state:
 
 ```bash
-kubectl --context kind-k8s-ai -n k8s-ai get pods
+kubectl --context kind-k8s-ai-classic -n k8s-ai get pods
 # NAME                           READY   STATUS    RESTARTS
 # kafka-0                        1/1     Running   0
 # qdrant-xxxxx                   1/1     Running   0
@@ -326,7 +326,7 @@ kubectl --context kind-k8s-ai -n k8s-ai get pods
 
 **Key Kubernetes design notes:**
 
-- **NodePorts** — three NodePort services expose the pods to the host: n8n on `:30000`, Qdrant on `:30001`, k8s-watcher on `:30002`. kind's `extraPortMappings` forwards these through to `localhost` on your machine.
+- **NodePorts** — three NodePort services expose the pods to the host: n8n on `:31000`, Qdrant on `:31001`, k8s-watcher on `:31002`. kind's `extraPortMappings` forwards these through to `localhost` on your machine.
 - **hostAliases** — the n8n pod has `host.docker.internal` mapped to `192.168.1.154` (your host IP) via `hostAliases`. This keeps all workflow URLs pointing to Ollama unchanged.
 - **`enableServiceLinks: false`** on the Kafka StatefulSet — Kubernetes auto-injects a `KAFKA_PORT=tcp://...` env var from the ClusterIP Service. The CP Kafka startup script chokes on this URL-format value. Disabling service links prevents the injection.
 - **initContainers** — both Kafka and n8n run a `busybox chown -R 1000:1000` initContainer. If the `./data` volumes were previously written by Docker Compose as root, this fixes permissions before the main container starts (CP Kafka and n8n both run as uid 1000).
@@ -337,7 +337,7 @@ kubectl --context kind-k8s-ai -n k8s-ai get pods
 The Qdrant collection must be created once before any vectors can be inserted. The collection schema specifies 768 dimensions and Cosine similarity — the exact parameters required by `nomic-embed-text`.
 
 ```bash
-curl -X PUT http://localhost:30001/collections/k8s \
+curl -X PUT http://localhost:31001/collections/k8s \
   -H 'Content-Type: application/json' \
   -d '{
     "vectors": { "size": 768, "distance": "Cosine" },
@@ -349,7 +349,7 @@ curl -X PUT http://localhost:30001/collections/k8s \
 
 ### n8n First-Run: Owner Account Setup
 
-Open `http://localhost:30000` in a browser. The first visit presents the owner account creation form — fill in your email, first name, last name, and a password. This becomes the primary admin account.
+Open `http://localhost:31000` in a browser. The first visit presents the owner account creation form — fill in your email, first name, last name, and a password. This becomes the primary admin account.
 
 ![n8n sign-in page — before owner setup, the login screen shows email + password fields](screenshots/01-signin-page.png)
 
@@ -431,7 +431,7 @@ The ServiceAccount is granted a ClusterRole with `list` and `watch` permissions 
 
 ### The HTTP Server — healthz and resync
 
-The watcher also exposes a lightweight HTTP server on port 8080 (NodePort 30002 on the host):
+The watcher also exposes a lightweight HTTP server on port 8080 (NodePort 31002 on the host):
 
 ```python
 # GET /healthz → {"status":"ok"}
@@ -482,25 +482,25 @@ For a manual import when the cluster is already running:
 
 ```bash
 # Get the n8n pod name
-N8N_POD=$(kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=n8n \
+N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=n8n \
   -o jsonpath='{.items[0].metadata.name}')
 
 # Copy workflow JSON files into the pod
-kubectl --context kind-k8s-ai -n k8s-ai cp workflows/n8n_cdc_k8s_flow.json   ${N8N_POD}:/tmp/
-kubectl --context kind-k8s-ai -n k8s-ai cp workflows/n8n_ai_k8s_flow.json    ${N8N_POD}:/tmp/
-kubectl --context kind-k8s-ai -n k8s-ai cp workflows/n8n_reset_k8s_flow.json ${N8N_POD}:/tmp/
+kubectl --context kind-k8s-ai-classic -n k8s-ai cp workflows/n8n_cdc_k8s_flow.json   ${N8N_POD}:/tmp/
+kubectl --context kind-k8s-ai-classic -n k8s-ai cp workflows/n8n_ai_k8s_flow.json    ${N8N_POD}:/tmp/
+kubectl --context kind-k8s-ai-classic -n k8s-ai cp workflows/n8n_reset_k8s_flow.json ${N8N_POD}:/tmp/
 
 # Import them (IDs are static — embedded in the JSON files)
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_cdc_k8s_flow.json
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_ai_k8s_flow.json
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_reset_k8s_flow.json
+kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_cdc_k8s_flow.json
+kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_ai_k8s_flow.json
+kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_reset_k8s_flow.json
 
 # Activate all three (IDs are fixed — no discovery step needed)
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sCDCflow00001
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sAIflow000001
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sRSTflow00001
-kubectl --context kind-k8s-ai -n k8s-ai rollout restart deployment/n8n
-kubectl --context kind-k8s-ai -n k8s-ai rollout status deployment/n8n --timeout=60s
+kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sCDCflow00001
+kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sAIflow000001
+kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sRSTflow00001
+kubectl --context kind-k8s-ai-classic -n k8s-ai rollout restart deployment/n8n
+kubectl --context kind-k8s-ai-classic -n k8s-ai rollout status deployment/n8n --timeout=60s
 ```
 
 > **Static workflow IDs:** The JSON files contain a hardcoded `id` field (`k8sCDCflow00001`, `k8sAIflow000001`, `k8sRSTflow00001`). Modern n8n (1.x+) uses this field on import — omitting it causes `SQLITE_CONSTRAINT: NOT NULL constraint failed: workflow_entity.id`.
@@ -796,12 +796,12 @@ The `$json` reference carries the `{ "points": [...] }` object built by Node 6 d
 Save the workflow (Ctrl/Cmd + S), then activate it from the CLI:
 
 ```bash
-N8N_POD=$(kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=n8n \
+N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=n8n \
   -o jsonpath='{.items[0].metadata.name}')
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n list:workflow
+kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n list:workflow
 # note the CDC workflow ID
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=<CDC_ID>
-kubectl --context kind-k8s-ai -n k8s-ai rollout restart deployment/n8n
+kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=<CDC_ID>
+kubectl --context kind-k8s-ai-classic -n k8s-ai rollout restart deployment/n8n
 ```
 
 ### CDC Flow in Action
@@ -841,7 +841,7 @@ Press **Tab** → search **"chat trigger"** → select **Chat Trigger**. This is
 | Make Chat Publicly Available | Toggle **ON** |
 | Webhook ID | `k8s-ai-chat` |
 
-This creates the public endpoint: `http://localhost:30000/webhook/k8s-ai-chat/chat`
+This creates the public endpoint: `http://localhost:31000/webhook/k8s-ai-chat/chat`
 
 No authentication is required on this endpoint — intentional for a local development environment. The Chat Trigger:
 - Holds the HTTP connection open while the workflow runs
@@ -851,7 +851,7 @@ No authentication is required on this endpoint — intentional for a local devel
 You can reach it from a browser (n8n renders a chat UI) or from curl:
 
 ```bash
-curl -X POST http://localhost:30000/webhook/k8s-ai-chat/chat \
+curl -X POST http://localhost:31000/webhook/k8s-ai-chat/chat \
   -H 'Content-Type: application/json' \
   -d '{"chatInput": "Show me all deployments and their replica counts"}'
 ```
@@ -1041,17 +1041,17 @@ n8n's Chat Trigger automatically surfaces the top-level `output` field as the ch
 ### Activate the AI Flow
 
 ```bash
-N8N_POD=$(kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=n8n \
+N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=n8n \
   -o jsonpath='{.items[0].metadata.name}')
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=<AI_ID>
-kubectl --context kind-k8s-ai -n k8s-ai rollout restart deployment/n8n
+kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=<AI_ID>
+kubectl --context kind-k8s-ai-classic -n k8s-ai rollout restart deployment/n8n
 ```
 
 ### The AI Flow in Action
 
 ![Public chat UI — "Hi there!" greeting, text input at the bottom](screenshots/09-ai-chat-public.png)
 
-Opening `http://localhost:30000/webhook/k8s-ai-chat/chat` presents n8n's built-in chat widget. No login, no setup — type and ask.
+Opening `http://localhost:31000/webhook/k8s-ai-chat/chat` presents n8n's built-in chat widget. No login, no setup — type and ask.
 
 ![Query typed: "List all namespaces in the Kubernetes cluster"](screenshots/10-ai-chat-query-typed.png)
 
@@ -1095,7 +1095,7 @@ Press **Tab** → search **"webhook"** → select **Webhook**. This is the entry
 
 **How to trigger:**
 ```bash
-curl -s -X POST http://localhost:30000/webhook/k8s-reset \
+curl -s -X POST http://localhost:31000/webhook/k8s-reset \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
@@ -1202,10 +1202,10 @@ return [{
 ### Activate the Reset Flow
 
 ```bash
-N8N_POD=$(kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=n8n \
+N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=n8n \
   -o jsonpath='{.items[0].metadata.name}')
-kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=<RESET_ID>
-kubectl --context kind-k8s-ai -n k8s-ai rollout restart deployment/n8n
+kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=<RESET_ID>
+kubectl --context kind-k8s-ai-classic -n k8s-ai rollout restart deployment/n8n
 ```
 
 ### Reset Flow Execution History
@@ -1281,7 +1281,7 @@ Kubernetes automatically injects environment variables for every ClusterIP Servi
 | Symptom | Likely Cause | Fix |
 |---|---|---|
 | CDC flow not triggering | Pod not running | `kubectl -n k8s-ai get pods` — if not Running, `kubectl apply -f infra/k8s/` |
-| LLM returns "No indexed resources" | Qdrant has 0 points | `curl -X POST http://localhost:30000/webhook/k8s-reset` then wait 45s |
+| LLM returns "No indexed resources" | Qdrant has 0 points | `curl -X POST http://localhost:31000/webhook/k8s-reset` then wait 45s |
 | Workflow webhooks return 404 | Workflows not active | `kubectl exec ${N8N_POD} -- n8n publish:workflow --id=...` then rollout restart |
 | Embedding scores all below 0.3 | embed_text format wrong | Verify natural-language sentence format in Parse Message node |
 | k8s-watcher CrashLoopBackOff | RBAC not applied | `kubectl apply -f infra/k8s/k8s-watcher/k8s-watcher-rbac.yaml` |

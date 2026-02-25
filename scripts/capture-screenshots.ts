@@ -249,7 +249,7 @@ test('Capture all n8n UI screenshots', async () => {
       await snap(page, '07-cdc-execution-detail.png');
     } else {
       // Trigger an event and wait
-      try { execFileSync('kubectl', ['--context','kind-k8s-ai','create','namespace','ss-ns'], { stdio:'pipe' }); } catch { /* exists */ }
+      try { execFileSync('kubectl', ['--context','kind-k8s-ai-classic','create','namespace','ss-ns'], { stdio:'pipe' }); } catch { /* exists */ }
       await new Promise(r => setTimeout(r, 8_000));
       await page.reload({ waitUntil: 'networkidle' });
       await page.waitForTimeout(2_000);
@@ -257,7 +257,7 @@ test('Capture all n8n UI screenshots', async () => {
       await page.locator('[data-test-id="execution-list-item"]').first().click().catch(() => {});
       await page.waitForTimeout(2_000);
       await snap(page, '07-cdc-execution-detail.png');
-      execFileSync('kubectl', ['--context','kind-k8s-ai','delete','namespace','ss-ns','--ignore-not-found','--wait=false'], { stdio:'pipe' });
+      execFileSync('kubectl', ['--context','kind-k8s-ai-classic','delete','namespace','ss-ns','--ignore-not-found','--wait=false'], { stdio:'pipe' });
     }
 
     // ══════════════════════════════════════════════════════════════════════════

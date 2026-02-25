@@ -54,7 +54,7 @@ This single command handles everything end-to-end:
 1. Verifies prerequisites
 2. Creates the kind cluster (`k8s-ai`) with `infra/kind-config.yaml` (NodePort mappings + data mounts)
 3. Deploys all 4 pods: Kafka, Qdrant, k8s-watcher, n8n
-4. Builds and loads the `k8s-watcher:latest` image into kind
+4. Builds and loads the `k8s-watcher-classic:latest` image into kind
 5. Creates the Qdrant `k8s` collection (768-dim Cosine)
 6. Injects the Kafka credential into the n8n SQLite database
 7. Imports and activates all 3 workflows
@@ -77,10 +77,10 @@ Expected completion time: ~4 minutes on a fast machine.
   Setup complete!
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  n8n dashboard      : http://localhost:30000
-  AI chat            : http://localhost:30000/webhook/k8s-ai-chat/chat
-  Qdrant             : http://localhost:30001
-  k8s-watcher health : http://localhost:30002/healthz
+  n8n dashboard      : http://localhost:31000
+  AI chat            : http://localhost:31000/webhook/k8s-ai-chat/chat
+  Qdrant             : http://localhost:31001
+  k8s-watcher health : http://localhost:31002/healthz
 
   Workflow IDs (static — embedded in JSON):
     CDC   = k8sCDCflow00001
@@ -104,23 +104,23 @@ Expected completion time: ~4 minutes on a fast machine.
 
 ### AI Chat (public, no login required)
 
-Open: **http://localhost:30000/webhook/k8s-ai-chat/chat**
+Open: **http://localhost:31000/webhook/k8s-ai-chat/chat**
 
 Or via curl:
 ```bash
-curl -X POST http://localhost:30000/webhook/k8s-ai-chat/chat \
+curl -X POST http://localhost:31000/webhook/k8s-ai-chat/chat \
   -H 'Content-Type: application/json' \
   -d '{"chatInput": "Show me all deployments and their replica counts"}'
 ```
 
 ### n8n Dashboard
 
-**http://localhost:30000** — sign in with `assaduzzaman.ict@gmail.com` / `admin@123Normal`
+**http://localhost:31000** — sign in with `assaduzzaman.ict@gmail.com` / `admin@123Normal`
 
 ### Reset & Resync Vector Database
 
 ```bash
-curl -X POST http://localhost:30000/webhook/k8s-reset \
+curl -X POST http://localhost:31000/webhook/k8s-reset \
   -H 'Content-Type: application/json' -d '{}'
 # Qdrant repopulates in ~30–45 s
 ```
@@ -128,7 +128,7 @@ curl -X POST http://localhost:30000/webhook/k8s-reset \
 ### k8s-watcher Health Check
 
 ```bash
-curl http://localhost:30002/healthz
+curl http://localhost:31002/healthz
 # {"status":"ok"}
 ```
 

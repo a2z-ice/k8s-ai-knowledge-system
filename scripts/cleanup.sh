@@ -12,7 +12,7 @@
 #
 # What this script removes:
 #   • kind cluster 'k8s-ai' (all pods, services, PVs)
-#   • k8s-watcher:latest Docker image (local)
+#   • k8s-watcher-classic:latest Docker image (local)
 #   • Docker image cached layers for k8s-watcher
 #
 # What this script does NOT remove by default:
@@ -34,7 +34,7 @@ step() { echo -e "\n${BOLD}${CYAN}━━━ $* ━━━${NC}"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-CLUSTER_NAME="k8s-ai"
+CLUSTER_NAME="k8s-ai-classic"
 WIPE_DATA=false
 AUTO_YES=false
 
@@ -56,7 +56,7 @@ echo -e "${BOLD}${RED}  Kubernetes AI Knowledge System — Cleanup${NC}"
 echo
 echo -e "  This will remove:"
 echo -e "    • kind cluster '${CLUSTER_NAME}'"
-echo -e "    • k8s-watcher:latest Docker image"
+echo -e "    • k8s-watcher-classic:latest Docker image"
 
 if [[ "${WIPE_DATA}" == "true" ]]; then
   echo -e "    ${RED}• ./data/n8n/    (n8n SQLite DB, credentials, workflows)${NC}"
@@ -87,11 +87,11 @@ fi
 # ── step 2: remove docker image ──────────────────────────────────────────────
 step "Removing k8s-watcher Docker image"
 
-if docker image inspect k8s-watcher:latest &>/dev/null 2>&1; then
-  docker rmi k8s-watcher:latest
-  ok "Image k8s-watcher:latest removed"
+if docker image inspect k8s-watcher-classic:latest &>/dev/null 2>&1; then
+  docker rmi k8s-watcher-classic:latest
+  ok "Image k8s-watcher-classic:latest removed"
 else
-  ok "Image k8s-watcher:latest not found — nothing to remove"
+  ok "Image k8s-watcher-classic:latest not found — nothing to remove"
 fi
 
 # ── step 3: wipe data directories (optional) ────────────────────────────────

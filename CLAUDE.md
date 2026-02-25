@@ -115,12 +115,12 @@ kind_vector_n8n/
 
 ### Deploy all services to the kind cluster
 ```bash
-kubectl --context kind-k8s-ai apply -f infra/k8s/00-namespace.yaml
-kubectl --context kind-k8s-ai apply -f infra/k8s/01-pvs.yaml
-kubectl --context kind-k8s-ai apply -f infra/k8s/kafka/
-kubectl --context kind-k8s-ai apply -f infra/k8s/qdrant/
-kubectl --context kind-k8s-ai apply -f infra/k8s/k8s-watcher/
-kubectl --context kind-k8s-ai apply -f infra/k8s/n8n/
+kubectl --context kind-k8s-ai-classic apply -f infra/k8s/00-namespace.yaml
+kubectl --context kind-k8s-ai-classic apply -f infra/k8s/01-pvs.yaml
+kubectl --context kind-k8s-ai-classic apply -f infra/k8s/kafka/
+kubectl --context kind-k8s-ai-classic apply -f infra/k8s/qdrant/
+kubectl --context kind-k8s-ai-classic apply -f infra/k8s/k8s-watcher/
+kubectl --context kind-k8s-ai-classic apply -f infra/k8s/n8n/
 ```
 
 ### Install test dependencies (first time only)
@@ -149,8 +149,8 @@ N8N_EMAIL=you@example.com N8N_PASS=yourpassword npm run screenshots
 
 ### Build and load k8s-watcher image into kind
 ```bash
-docker build -t k8s-watcher:latest ./k8s-watcher/
-kind load docker-image k8s-watcher:latest --name k8s-ai
+docker build -t k8s-watcher-classic:latest ./k8s-watcher/
+kind load docker-image k8s-watcher-classic:latest --name k8s-ai-classic
 ```
 
 ### Pull Ollama models (host machine only)
@@ -199,7 +199,7 @@ POST /webhook/k8s-reset
 
 k8s-watcher watches 10 resource types: Namespace, Pod, Service, ConfigMap, PVC, Secret, Deployment, ReplicaSet, StatefulSet, DaemonSet. Each runs in its own thread with auto-restart on error. For Secrets, only safe metadata is stored (`type` and `dataKeys` list) — base64-encoded values are never published to Kafka or Qdrant.
 
-k8s-watcher also exposes `GET http://localhost:30002/healthz` → `{"status":"ok"}` (NodePort 30002)
+k8s-watcher also exposes `GET http://localhost:31002/healthz` → `{"status":"ok"}` (NodePort 31002)
 
 ### Qdrant vector schema
 Collection `k8s`, 768-dim Cosine. Point ID = `resource_uid` (UUID from k8s). Payload: `kind`, `namespace`, `name`, `labels`, `annotations`, `raw_spec_json`, `last_updated_timestamp`.
@@ -210,33 +210,48 @@ Collection `k8s`, 768-dim Cosine. Point ID = `resource_uid` (UUID from k8s). Pay
 
 | Item | Value |
 |------|-------|
-| n8n URL (localhost) | http://localhost:30000 |
-| n8n URL (domain) | http://n8n.genai.prod:30000 (requires `/etc/hosts`: `192.168.1.154 n8n.genai.prod`) |
+| n8n URL (localhost) | http://localhost:31000 |
+| n8n URL (domain) | http://n8n.genai.prod:31000 (requires `/etc/hosts`: `192.168.1.154 n8n.genai.prod`) |
 | HTTP Basic Auth | admin / admin |
 | Owner email | assaduzzaman.ict@gmail.com |
 | Owner password | admin@123Normal |
 | CDC workflow ID | `k8sCDCflow00001` (static — embedded in JSON) |
 | AI workflow ID | `k8sAIflow000001` (static — embedded in JSON) |
 | Reset workflow ID | `k8sRSTflow00001` (static — embedded in JSON) |
-| AI public chat URL | http://n8n.genai.prod:30000/webhook/k8s-ai-chat/chat |
-| Reset endpoint | POST http://localhost:30000/webhook/k8s-reset |
-| k8s-watcher health | http://localhost:30002/healthz (host) / http://k8s-watcher:8080/healthz (in-cluster) |
-| Qdrant URL | http://localhost:30001 (host) / http://qdrant:6333 (in-cluster) |
+| AI public chat URL | http://n8n.genai.prod:31000/webhook/k8s-ai-chat/chat |
+| Reset endpoint | POST http://localhost:31000/webhook/k8s-reset |
+| k8s-watcher health | http://localhost:31002/healthz (host) / http://k8s-watcher:8080/healthz (in-cluster) |
+| Qdrant URL | http://localhost:31001 (host) / http://qdrant:6333 (in-cluster) |
 | Kafka topic | `k8s-resources` |
 | Kafka consumer group | `n8n-cdc-consumer` |
 | Qdrant collection | `k8s` |
 | Embedding model | `nomic-embed-text:latest` (768-dim) |
 | Chat model | `qwen3:8b` |
-| kind cluster | `k8s-ai` (context: `kind-k8s-ai`) |
+| kind cluster | `k8s-ai-classic` (context: `kind-k8s-ai-classic`) |
 | k8s namespace | `k8s-ai` |
 
 ### NodePort Assignments
 
 | NodePort | Service | Host URL |
 |----------|---------|----------|
-| 30000 | n8n | http://localhost:30000 |
-| 30001 | Qdrant | http://localhost:30001 |
-| 30002 | k8s-watcher | http://localhost:30002/healthz |
+| 31000 | n8n | http://localhost:31000 |
+| 31001 | Qdrant | http://localhost:31001 |
+| 31002 | k8s-watcher | http://localhost:31002/healthz |
+
+---
+
+## Port & Cluster Configuration Coherence
+
+**Four places must stay in sync** when changing cluster name or NodePorts — if any one is updated without the others, the system breaks:
+
+| File | What to update |
+|------|---------------|
+| `infra/kind-config.yaml` | `name:` (cluster name) and `containerPort`/`hostPort` values in `extraPortMappings` |
+| `infra/k8s/{n8n,qdrant,k8s-watcher}/` service YAMLs | `nodePort:` values |
+| `scripts/setup.sh` | `CLUSTER_NAME` and `CONTEXT` constants at the top |
+| `tests/e2e/playwright_k8s_ai_e2e.spec.ts` | `N8N`, `QDRANT`, and `K8S_CONTEXT` constants |
+
+> This branch (`classic-n8n-flow`) uses cluster name `k8s-ai-classic` with ports 31000/31001/31002. All four locations have been updated to match.
 
 ---
 
@@ -252,7 +267,7 @@ Collection `k8s`, 768-dim Cosine. Point ID = `resource_uid` (UUID from k8s). Pay
 ## Known Operational Patterns
 
 - **Pods auto-restart** — Deployments have `restartPolicy: Always`. If Docker Desktop restarts, pods come back automatically after ~30s. Check: `kubectl -n k8s-ai get pods`. If pods are missing entirely, re-apply: `kubectl apply -f infra/k8s/`.
-- **k8s-watcher image must be loaded into kind** — The image is `imagePullPolicy: Never`. After any `docker build`, run `kind load docker-image k8s-watcher:latest --name k8s-ai` before rolling out.
+- **k8s-watcher image must be loaded into kind** — The image is `imagePullPolicy: Never`. After any `docker build`, run `kind load docker-image k8s-watcher-classic:latest --name k8s-ai-classic` before rolling out.
 - **Workflow active status** — `n8n list:workflow` does NOT show the active flag. The reliable check is webhook HTTP codes: AI chat (`/webhook/k8s-ai-chat/chat`) and Reset (`/webhook/k8s-reset`) must return 200. If they return 404, workflows are inactive — run `/reimport-workflows`.
 - **Qdrant repopulation after reset** — After `POST /webhook/k8s-reset`, Qdrant is empty for ~30–45 seconds while k8s-watcher republishes all resources. Do not run E2E tests until points_count ≥ 10.
 - **30s startup wait** — After applying manifests, wait at least 30 seconds before probing Qdrant, Kafka, or n8n endpoints.
@@ -270,3 +285,5 @@ Collection `k8s`, 768-dim Cosine. Point ID = `resource_uid` (UUID from k8s). Pay
 - **`obj.kind` is always None in k8s-watcher** — The k8s Python client watch stream doesn't populate `obj.kind`, and `raw.get("kind", "")` is also empty. `obj_to_payload` resolves this via `kind = obj.kind or raw.get("kind", "") or kind_hint`, where `kind_hint` is the resource type label passed by both `watch_stream` and `resync_all`. The `kind` payload field is correctly set; the `embed_text` is also correct ("Kubernetes Secret named ..."). Do not call `obj_to_payload` without passing `kind_hint`.
 - **Secret-safe spec in k8s-watcher** — When `kind == "Secret"`, `obj_to_payload` replaces the spec with `{"type": raw.get("type", "Opaque"), "dataKeys": list(raw.get("data", {}).keys())}`. The base64-encoded values in `raw["data"]` are discarded. This applies to both `watch_stream` and `resync_all`.
 - **E2E test 4 limit=50** — Uses limit 50 (not 20) to ensure cluster-scoped resources rank in top results despite `kind=null` lowering their semantic similarity score.
+- **E2E test execution order** — Tests are defined in the spec file as 1, 2, 3, 4, 6, 7, 5. Playwright runs them in definition order, so Test 5 (Reset) always runs last. This is intentional: Reset wipes Qdrant, which would invalidate tests 6 and 7 if run after.
+- **Dual NodePort services for Qdrant and k8s-watcher** — Each has both a ClusterIP service (for in-cluster access by name, e.g., `http://qdrant:6333`) and a separate NodePort service (`qdrant-nodeport`, `k8s-watcher-nodeport`) for host access. The ClusterIP services are what n8n workflow nodes reference; the NodePort services expose health/debug endpoints to the host.

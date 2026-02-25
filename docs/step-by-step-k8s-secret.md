@@ -115,28 +115,28 @@ Two new tests were added to `tests/e2e/playwright_k8s_ai_e2e.spec.ts`:
 
 ```bash
 # 1. Build new k8s-watcher image with Secret support
-docker build -t k8s-watcher:latest ./k8s-watcher/
+docker build -t k8s-watcher-classic:latest ./k8s-watcher/
 
 # 2. Load into kind cluster (imagePullPolicy: Never)
-kind load docker-image k8s-watcher:latest --name k8s-ai
+kind load docker-image k8s-watcher-classic:latest --name k8s-ai-classic
 
 # 3. Apply updated RBAC (adds secrets to ClusterRole)
-kubectl --context kind-k8s-ai apply -f infra/k8s/k8s-watcher/k8s-watcher-rbac.yaml
+kubectl --context kind-k8s-ai-classic apply -f infra/k8s/k8s-watcher/k8s-watcher-rbac.yaml
 
 # 4. Rolling restart to pick up new image
-kubectl --context kind-k8s-ai -n k8s-ai rollout restart deployment/k8s-watcher
-kubectl --context kind-k8s-ai -n k8s-ai rollout status deployment/k8s-watcher
+kubectl --context kind-k8s-ai-classic -n k8s-ai rollout restart deployment/k8s-watcher
+kubectl --context kind-k8s-ai-classic -n k8s-ai rollout status deployment/k8s-watcher
 
 # Confirm startup log:
 # "Watching 10 resource types on topic 'k8s-resources' (Secrets: key names only)"
 # "Starting watch: Secret"
 
 # 5. Trigger full resync so Secrets are indexed into Qdrant
-curl -X POST http://localhost:30000/webhook/k8s-reset \
+curl -X POST http://localhost:31000/webhook/k8s-reset \
   -H 'Content-Type: application/json' -d '{}'
 
 # 6. Wait ~30-45s for Qdrant repopulation, then verify
-curl -s http://localhost:30001/collections/k8s/points/scroll \
+curl -s http://localhost:31001/collections/k8s/points/scroll \
   -H 'Content-Type: application/json' \
   -d '{"filter":{"must":[{"key":"kind","match":{"value":"Secret"}}]},"limit":5,"with_payload":true}' \
   | python3 -m json.tool
