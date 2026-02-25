@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: qdrant
-  namespace: k8s-ai
+  namespace: k8s-classic-ai
 spec:
   replicas: 1
   selector:
@@ -31,4 +31,4 @@ spec:
       volumes:
         - name: qdrant-data
           persistentVolumeClaim:
-            claimName: qdrant-pvc
+            claimName: qdrant-classic-pvc

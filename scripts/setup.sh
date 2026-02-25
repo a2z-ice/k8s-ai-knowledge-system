@@ -27,7 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CLUSTER_NAME="k8s-ai-classic"
 CONTEXT="kind-k8s-ai-classic"
-NAMESPACE="k8s-ai"
+NAMESPACE="k8s-classic-ai"
 KEEP_CLUSTER=false
 RUN_TESTS=true
 
@@ -117,7 +117,19 @@ else
   ok "node_modules already present"
 fi
 
-# ── step 2: check for port conflicts ────────────────────────────────────────
+# ── step 2: delete existing cluster (before port check, so its ports are freed) ──
+if [[ "${KEEP_CLUSTER}" == "false" ]]; then
+  step "Deleting existing cluster (if any)"
+  if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
+    warn "Deleting existing cluster '${CLUSTER_NAME}' …"
+    kind delete cluster --name "${CLUSTER_NAME}"
+    ok "Cluster deleted"
+  else
+    ok "No existing cluster '${CLUSTER_NAME}' found"
+  fi
+fi
+
+# ── step 3: check for port conflicts (after cluster deletion) ────────────────
 # Skip port check when reusing existing cluster — the ports are already held by kind
 if [[ "${KEEP_CLUSTER}" == "false" ]]; then
   step "Checking port availability (31000–31002)"
@@ -142,18 +154,18 @@ else
   ok "Skipped — reusing existing cluster (--keep-cluster)"
 fi
 
-# ── step 3: data directories ─────────────────────────────────────────────────
-# NEVER wipe data/n8n/ — it contains the encryption key (config) and credentials.
+# ── step 4: data directories ─────────────────────────────────────────────────
+# NEVER wipe data-classic/n8n/ — it contains the encryption key (config) and credentials.
 # Duplicate workflows are handled by deleting workflow_entity rows via sqlite3
 # (with n8n stopped) in step 10 before re-importing.
 step "Data directories"
 
-for dir in data/n8n data/qdrant data/kafka; do
+for dir in data-classic/n8n data-classic/qdrant data-classic/kafka; do
   mkdir -p "${PROJECT_ROOT}/${dir}"
   ok "  ${dir}"
 done
 
-# ── step 4: kind cluster ─────────────────────────────────────────────────────
+# ── step 5a: kind cluster ─────────────────────────────────────────────────────
 step "kind cluster"
 
 if [[ "${KEEP_CLUSTER}" == "true" ]]; then
@@ -163,12 +175,6 @@ if [[ "${KEEP_CLUSTER}" == "true" ]]; then
     die "--keep-cluster specified but cluster '${CLUSTER_NAME}' does not exist"
   fi
 else
-  if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
-    warn "Deleting existing cluster '${CLUSTER_NAME}' …"
-    kind delete cluster --name "${CLUSTER_NAME}"
-    ok "Cluster deleted"
-  fi
-
   log "Creating cluster '${CLUSTER_NAME}' with infra/kind-config.yaml …"
   kind create cluster --config "${PROJECT_ROOT}/infra/kind-config.yaml"
   ok "Cluster created"
@@ -266,7 +272,7 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 step "n8n workflows"
 
-N8N_DB="${PROJECT_ROOT}/data/n8n/database.sqlite"
+N8N_DB="${PROJECT_ROOT}/data-classic/n8n/database.sqlite"
 
 # 10a. Stop n8n to safely modify its SQLite DB
 log "Stopping n8n for safe DB setup …"
@@ -286,7 +292,7 @@ ok "n8n stopped"
 if [[ -n "${SQLITE3_BIN}" && -f "${N8N_DB}" ]]; then
   log "Removing existing workflow rows (credentials and encryption key preserved) …"
   "${SQLITE3_BIN}" "${N8N_DB}" \
-    "DELETE FROM workflow_entity WHERE name IN ('CDC_K8s_Flow','AI_K8s_Flow','Reset_K8s_Flow')
+    "DELETE FROM workflow_entity WHERE name IN ('classic_CDC_K8s_Flow','classic_AI_K8s_Flow','classic_Reset_K8s_Flow')
         OR id IN ('k8sCDCflow00001','k8sAIflow000001','k8sRSTflow00001');" \
     2>/dev/null || true
   # Clean up orphaned shared_workflow rows
@@ -393,16 +399,16 @@ log "n8n pod: ${N8N_POD}"
 
 # 10e. Copy workflow files and import (n8n must be running for CLI)
 log "Copying workflow JSON files into pod …"
-for wf in n8n_cdc_k8s_flow.json n8n_ai_k8s_flow.json n8n_reset_k8s_flow.json; do
+for wf in classic_n8n_cdc_k8s_flow.json classic_n8n_ai_k8s_flow.json classic_n8n_reset_k8s_flow.json; do
   kubectl --context "${CONTEXT}" -n "${NAMESPACE}" \
     cp "${PROJECT_ROOT}/workflows/${wf}" "${N8N_POD}:/tmp/${wf}"
 done
 ok "Workflow files copied"
 
 log "Importing workflows …"
-n8n_exec n8n import:workflow --input=/tmp/n8n_cdc_k8s_flow.json
-n8n_exec n8n import:workflow --input=/tmp/n8n_ai_k8s_flow.json
-n8n_exec n8n import:workflow --input=/tmp/n8n_reset_k8s_flow.json
+n8n_exec n8n import:workflow --input=/tmp/classic_n8n_cdc_k8s_flow.json
+n8n_exec n8n import:workflow --input=/tmp/classic_n8n_ai_k8s_flow.json
+n8n_exec n8n import:workflow --input=/tmp/classic_n8n_reset_k8s_flow.json
 ok "Workflows imported"
 
 # 10f. Workflow IDs — these are the static IDs embedded in the workflow JSON files.
@@ -413,7 +419,7 @@ RESET_ID="k8sRSTflow00001"
 
 # Verify the IDs are actually present in the DB after import
 log "Verifying imported workflow IDs …"
-EXPORT_TMP="/tmp/k8s-ai-n8n-export-$$.json"
+EXPORT_TMP="/tmp/k8s-classic-ai-n8n-export-$$.json"
 n8n_exec sh -c "n8n export:workflow --all --output=/tmp/n8n-all-workflows.json 2>/dev/null; true"
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" \
   cp "${N8N_POD}:/tmp/n8n-all-workflows.json" "${EXPORT_TMP}" 2>/dev/null
@@ -525,7 +531,7 @@ if [[ "${POINTS}" -ge 10 ]]; then
 else
   warn "Qdrant has only ${POINTS} points after 120s"
   warn "k8s-watcher may still be indexing. Check:"
-  warn "  kubectl -n k8s-ai logs deployment/k8s-watcher --tail 30"
+  warn "  kubectl -n k8s-classic-ai logs deployment/k8s-watcher --tail 30"
 fi
 
 # ── step 12: smoke-test endpoints ────────────────────────────────────────────

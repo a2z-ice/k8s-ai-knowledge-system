@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: kafka
-  namespace: k8s-ai
+  namespace: k8s-classic-ai
 spec:
   serviceName: kafka-headless
   replicas: 1
@@ -42,7 +42,7 @@ spec:
             - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
               value: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
             - name: KAFKA_CONTROLLER_QUORUM_VOTERS
-              value: "1@kafka-0.kafka-headless.k8s-ai.svc.cluster.local:9093"
+              value: "1@kafka-0.kafka-headless.k8s-classic-ai.svc.cluster.local:9093"
             - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
               value: "1"
             - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
@@ -65,4 +65,4 @@ spec:
       volumes:
         - name: kafka-data
           persistentVolumeClaim:
-            claimName: kafka-pvc
+            claimName: kafka-classic-pvc

@@ -19,7 +19,7 @@ POST /webhook/k8s-reset
 
 **Stack:** kind · n8n · Qdrant · Kafka (KRaft) · Ollama · Kubernetes · Playwright
 
-All services run as pods inside the `k8s-ai` namespace of a local kind cluster.
+All services run as pods inside the `k8s-classic-ai` namespace of a local kind cluster.
 
 ---
 
@@ -52,26 +52,28 @@ ollama pull qwen3:8b           # chat / reasoning model (~5.2 GB)
 This single command handles everything end-to-end:
 
 1. Verifies prerequisites
-2. Creates the kind cluster (`k8s-ai`) with `infra/kind-config.yaml` (NodePort mappings + data mounts)
+2. Creates the kind cluster (`k8s-ai-classic`) with `infra/kind-config.yaml` (NodePort mappings + data mounts)
 3. Deploys all 4 pods: Kafka, Qdrant, k8s-watcher, n8n
 4. Builds and loads the `k8s-watcher-classic:latest` image into kind
 5. Creates the Qdrant `k8s` collection (768-dim Cosine)
 6. Injects the Kafka credential into the n8n SQLite database
 7. Imports and activates all 3 workflows
 8. Triggers an initial resync and waits for Qdrant to populate (≥ 10 points)
-9. Runs `npm test` — all 5 E2E tests must pass
+9. Runs `npm test` — all 7 E2E tests must pass
 
 Expected completion time: ~4 minutes on a fast machine.
 
 ```
 ━━━ Running E2E test suite ━━━
-  ✓  1  CDC: create namespace → Kafka event published + Qdrant insertion       (2.9s)
-  ✓  2  CDC: update deployment → old vector replaced (dedup by resource_uid)   (2.0s)
-  ✓  3  CDC: delete resource → point removed from Qdrant vector store          (32ms)
-  ✓  4  AI: namespace count query → structured markdown table response          (3.4s)
-  ✓  5  Reset: POST /webhook/k8s-reset clears Qdrant and CDC resync repopulates (3.4s)
+  ✓  1  AI: namespace count query → structured markdown table response          (10.7s)
+  ✓  2  AI: secrets query → returns Secret metadata without exposing values     (1.1s)
+  ✓  3  CDC: create namespace → Kafka event published + Qdrant insertion        (2.5s)
+  ✓  4  CDC: update deployment → old vector replaced (dedup by resource_uid)    (1.9s)
+  ✓  5  CDC: delete resource → point removed from Qdrant vector store           (31ms)
+  ✓  6  CDC: create secret → Kafka event + Qdrant insertion (safe metadata only)(2.6s)
+  ✓  7  Reset: POST /webhook/k8s-reset clears Qdrant and CDC resync repopulates (3.4s)
 
-  5 passed (12.1s)
+  7 passed (22.7s)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Setup complete!
@@ -94,7 +96,7 @@ Expected completion time: ~4 minutes on a fast machine.
 ./scripts/setup.sh                      # full from-scratch setup
 ./scripts/setup.sh --keep-cluster       # reuse existing cluster; reimport workflows + run tests
 ./scripts/setup.sh --no-test            # skip the final npm test run
-./scripts/cleanup.sh                    # delete cluster + watcher image (keeps ./data/)
+./scripts/cleanup.sh                    # delete cluster + watcher image (keeps ./data-classic/)
 ./scripts/cleanup.sh --wipe-data --yes  # full clean slate
 ```
 
@@ -138,9 +140,9 @@ curl http://localhost:31002/healthz
 
 | Workflow | ID | Purpose |
 |----------|----|---------|
-| CDC_K8s_Flow | `k8sCDCflow00001` | Kafka → embed → Qdrant upsert |
-| AI_K8s_Flow | `k8sAIflow000001` | Chat → embed → Qdrant search → LLM |
-| Reset_K8s_Flow | `k8sRSTflow00001` | Clear Qdrant + trigger k8s-watcher resync |
+| classic_CDC_K8s_Flow | `k8sCDCflow00001` | Kafka → embed → Qdrant upsert |
+| classic_AI_K8s_Flow | `k8sAIflow000001` | Chat → embed → Qdrant search → LLM |
+| classic_Reset_K8s_Flow | `k8sRSTflow00001` | Clear Qdrant + trigger k8s-watcher resync |
 
 Workflow IDs are **static** — embedded in the JSON files. n8n 1.x+ uses the `id` field from the JSON on import. The `setup.sh` script handles deduplication by deleting existing rows (by name and ID) before re-importing.
 
@@ -149,7 +151,7 @@ Workflow IDs are **static** — embedded in the JSON files. n8n 1.x+ uses the `i
 ## Running Tests
 
 ```bash
-npm test                                # all 5 E2E tests
+npm test                                # all 7 E2E tests
 npm run test:single "create namespace"  # single test by name
 ```
 
@@ -165,7 +167,7 @@ N8N_EMAIL=assaduzzaman.ict@gmail.com N8N_PASS=admin@123Normal npm run screenshot
 ```
 ├── scripts/
 │   ├── setup.sh        # full bootstrap: cluster + pods + workflows + tests
-│   └── cleanup.sh      # tear down cluster and images (optionally wipes ./data/)
+│   └── cleanup.sh      # tear down cluster and images (optionally wipes ./data-classic/)
 ├── workflows/          # n8n workflow JSON files (with static id fields)
 ├── k8s-watcher/        # Python K8s API watcher → Kafka
 ├── infra/
@@ -206,5 +208,6 @@ When using [Claude Code](https://claude.ai/code) in this repo, these project-spe
 | `/start-services` | Apply k8s manifests and verify all components are healthy |
 | `/reset-db` | Wipe Qdrant + trigger CDC resync |
 | `/reimport-workflows` | Reimport + reactivate all 3 n8n workflows |
-| `/test` | Run all 5 E2E tests with diagnostic output |
+| `/test` | Run all 7 E2E tests with diagnostic output |
 | `/screenshots` | Capture all UI screenshots |
+| `/remember` | Save current session state to persistent memory |

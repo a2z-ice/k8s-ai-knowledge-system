@@ -2,13 +2,19 @@
  * E2E tests for the Kubernetes AI Knowledge System.
  *
  * Coverage:
- *   1. Create namespace → Kafka event published + Qdrant insertion
- *   2. Update deployment → old vector replaced (dedup by resource_uid)
- *   3. Delete resource  → point removed from Qdrant
- *   4. AI query        → structured markdown table response
- *   5. Reset           → Qdrant cleared + CDC resync repopulates
+ *   1. AI query        → structured markdown table response
+ *   2. AI secrets query → Secret metadata returned, values never exposed
+ *   3. Create namespace → Kafka event published + Qdrant insertion
+ *   4. Update deployment → old vector replaced (dedup by resource_uid)
+ *   5. Delete resource  → point removed from Qdrant
  *   6. CDC Secret      → Secret event in Kafka + Qdrant (safe metadata only, no values)
- *   7. AI secrets query → Secret metadata returned, values never exposed
+ *   7. Reset           → Qdrant cleared + CDC resync repopulates
+ *
+ * Execution order rationale:
+ *   AI tests (1–2) run FIRST — before CDC tests (3–6) trigger Ollama embed calls
+ *   that would queue ahead of the AI tests' own embed+chat calls via
+ *   OLLAMA_NUM_PARALLEL=1.  Both AI tests query initial Qdrant data seeded by
+ *   setup.sh and are independent of the CDC tests.  Reset (7) always runs last.
  *
  * The tests exercise the full pipeline:
  *   k8s API → k8s-watcher → Kafka → (CDC processing) → Qdrant → Ollama LLM
@@ -18,7 +24,7 @@
  * activated via the UI, the same pipeline runs automatically on every change.
  *
  * Prerequisites (all set up by Phases 1–3):
- *   - kind cluster 'k8s-ai' running
+ *   - kind cluster 'k8s-ai-classic' running
  *   - docker compose services up  (qdrant:6333, kafka:9092, k8s-watcher)
  *   - Ollama on host              (localhost:11434, nomic-embed-text + qwen3:8b)
  *   - Qdrant collection 'k8s'     (seeded with cluster snapshot)
@@ -33,7 +39,7 @@ const QDRANT  = 'http://localhost:31001';
 const OLLAMA  = 'http://localhost:11434';
 const KAFKA_TOPIC = 'k8s-resources';
 const K8S_CONTEXT = 'kind-k8s-ai-classic';
-const K8S_NAMESPACE = 'k8s-ai';
+const K8S_NAMESPACE = 'k8s-classic-ai';
 const EMBED_MODEL = 'nomic-embed-text';
 const CHAT_MODEL  = 'qwen3:8b';
 
@@ -127,17 +133,8 @@ async function qdrantUpsert(
 
 /**
  * Wait until Qdrant points_count is stable (unchanged for `stableMs` ms).
- *
- * Why this is needed for Test 4:
- *   Test 1 creates AND asynchronously deletes a namespace.  Kubernetes
- *   terminates child resources (ServiceAccounts, ConfigMaps …) after the
- *   test returns, generating a burst of Kafka events.  n8n CDC processes
- *   each ADDED/MODIFIED event by calling Ollama nomic-embed-text.  Because
- *   OLLAMA_NUM_PARALLEL=1, those embed calls serialize with Test 4's own
- *   embed + LLM calls, causing Test 4 to hang until n8n's queue drains.
- *
- *   Waiting here until Qdrant is stable means all n8n CDC embed→insert
- *   cycles have completed and Ollama's queue is empty before Test 4 begins.
+ * Used as a sanity check before AI tests to confirm the initial resync has
+ * finished seeding Qdrant.
  */
 async function waitForQdrantStable(
   request: APIRequestContext,
@@ -155,7 +152,7 @@ async function waitForQdrantStable(
         lastCount = count;
         stableSince = Date.now();
       } else if (lastCount >= 0 && Date.now() - stableSince >= stableMs) {
-        return; // stable for stableMs → n8n CDC queue drained
+        return; // stable for stableMs → initial resync done
       }
     }
     await sleep(2_000);
@@ -171,107 +168,11 @@ async function qdrantGet(request: APIRequestContext, uid: string) {
   return body.result ?? null;
 }
 
-// ── Test 1: Create namespace ──────────────────────────────────────────────────
-test('CDC: create namespace → Kafka event published + Qdrant insertion', async ({ request }) => {
-  const NS  = 'e2e-create-ns';
-
-  // Remove any leftover from a previous run
-  try { kubectl(['delete', 'namespace', NS, '--ignore-not-found', '--wait=false']); } catch { /* ok */ }
-  await sleep(500);
-
-  const offsetBefore = kafkaOffset();
-
-  // 1. Create namespace in kind
-  kubectl(['create', 'namespace', NS]);
-  const uid = kubectl(['get', 'namespace', NS, '-o', 'jsonpath={.metadata.uid}']);
-  expect(uid, 'namespace uid must be non-empty').toBeTruthy();
-
-  // 2. Verify k8s-watcher published an ADDED event to Kafka
-  const offsetAfter = await waitForKafkaEvent(offsetBefore, 10_000);
-  expect(offsetAfter, 'Kafka offset must advance after namespace creation')
-    .toBeGreaterThan(offsetBefore);
-
-  // 3. CDC processing: embed + upsert into Qdrant (simulates n8n CDC flow logic)
-  await qdrantUpsert(request, uid, 'Namespace', '', NS, {}, '{}', new Date().toISOString());
-
-  // 4. Verify the point is in Qdrant with correct payload
-  const point = await qdrantGet(request, uid);
-  expect(point, 'Qdrant must contain the new namespace').not.toBeNull();
-  expect(point.payload.kind).toBe('Namespace');
-  expect(point.payload.name).toBe(NS);
-  expect(point.vector).toHaveLength(768);
-
-  // Cleanup
-  kubectl(['delete', 'namespace', NS, '--ignore-not-found', '--wait=false']);
-});
-
-// ── Test 2: Update deployment → vector replacement ────────────────────────────
-test('CDC: update deployment → old vector replaced (dedup by resource_uid)', async ({ request }) => {
-  // Use the coredns deployment — always present in a kind cluster
-  const uid  = kubectl(['get', 'deployment', 'coredns', '-n', 'kube-system',
-                        '-o', 'jsonpath={.metadata.uid}']);
-  expect(uid, 'coredns deployment must exist').toBeTruthy();
-
-  // Seed an initial point so we have something to replace
-  const ts1 = new Date(Date.now() - 5_000).toISOString(); // 5 s in the past
-  await qdrantUpsert(request, uid, 'Deployment', 'kube-system', 'coredns',
-    { app: 'coredns' }, '{"replicas":2}', ts1);
-  const before = await qdrantGet(request, uid);
-  expect(before).not.toBeNull();
-  expect(before.payload.last_updated_timestamp).toBe(ts1);
-
-  // Trigger a MODIFIED event: annotate the deployment
-  const offsetBefore = kafkaOffset();
-  const marker = `e2e-${Date.now()}`;
-  kubectl(['annotate', 'deployment', 'coredns', '-n', 'kube-system',
-           `e2e-test=${marker}`, '--overwrite']);
-
-  // k8s-watcher should detect the MODIFIED event
-  const offsetAfter = await waitForKafkaEvent(offsetBefore, 10_000);
-  expect(offsetAfter, 'Kafka offset must advance after deployment annotation')
-    .toBeGreaterThan(offsetBefore);
-
-  // CDC processing: replace the vector (same uid → dedup)
-  const ts2 = new Date().toISOString();
-  await qdrantUpsert(request, uid, 'Deployment', 'kube-system', 'coredns',
-    { app: 'coredns' }, `{"replicas":2,"e2eMarker":"${marker}"}`, ts2);
-
-  // Verify the point was replaced, not duplicated
-  const after = await qdrantGet(request, uid);
-  expect(after).not.toBeNull();
-  expect(after.payload.kind).toBe('Deployment');
-  expect(after.payload.last_updated_timestamp).toBe(ts2);        // new timestamp
-  expect(after.payload.last_updated_timestamp).not.toBe(ts1);    // replaced, not the old one
-});
-
-// ── Test 3: Delete resource → removed from Qdrant ────────────────────────────
-test('CDC: delete resource → point removed from Qdrant vector store', async ({ request }) => {
-  // Use a synthetic but valid UUID so this test is self-contained
-  const uid = 'e2e10000-e2e1-4e2e-ae2e-e2e100000003';
-  const NS  = 'e2e-ephemeral';
-
-  // Seed the point
-  await qdrantUpsert(request, uid, 'Namespace', '', NS, {}, '{}', new Date().toISOString());
-  const before = await qdrantGet(request, uid);
-  expect(before, 'point must exist before deletion').not.toBeNull();
-
-  // CDC DELETE: remove from Qdrant by resource_uid
-  const del = await request.post(`${QDRANT}/collections/k8s/points/delete`, {
-    data: { points: [uid] },
-  });
-  expect(del.ok(), `Qdrant delete failed: ${del.status()}`).toBeTruthy();
-
-  // Verify the point is gone
-  const after = await qdrantGet(request, uid);
-  expect(after, 'point must be absent after deletion').toBeNull();
-});
-
-// ── Test 4: AI query → markdown table ────────────────────────────────────────
+// ── Test 1: AI query → markdown table ────────────────────────────────────────
+// Runs FIRST — before CDC tests trigger Ollama embed calls that would queue
+// ahead of this test's embed+chat calls (OLLAMA_NUM_PARALLEL=1).
 test('AI: namespace count query → structured markdown table response', async ({ request }) => {
-  // Drain n8n CDC's Ollama queue before issuing our own embed + LLM calls.
-  // Test 1's namespace lifecycle (create + async delete) triggers delayed
-  // Kafka events; n8n CDC processes each with an Ollama embed call that
-  // serialises with ours (OLLAMA_NUM_PARALLEL=1) and causes a hang.
+  // Confirm Qdrant is populated from the initial resync before querying.
   await waitForQdrantStable(request);
 
   const QUERY = 'How many namespaces exist in the Kubernetes cluster and how many resources per namespace?';
@@ -338,51 +239,8 @@ Rules:
   expect(answer.toLowerCase()).not.toMatch(/postgres/);
 });
 
-// ── Test 6: CDC Secret ────────────────────────────────────────────────────────
-test('CDC: create secret → Kafka event published + Qdrant insertion (safe metadata only)', async ({ request }) => {
-  const SECRET_NAME = 'e2e-test-secret';
-
-  // Remove any leftover from a previous run
-  try { kubectl(['-n', K8S_NAMESPACE, 'delete', 'secret', SECRET_NAME, '--ignore-not-found', '--wait=false']); } catch { /* ok */ }
-  await sleep(500);
-
-  const offsetBefore = kafkaOffset();
-
-  // 1. Create a secret with sensitive data in k8s-ai namespace
-  kubectl(['-n', K8S_NAMESPACE, 'create', 'secret', 'generic', SECRET_NAME,
-    '--from-literal=username=admin', '--from-literal=password=supersecret123']);
-  const uid = kubectl(['-n', K8S_NAMESPACE, 'get', 'secret', SECRET_NAME,
-    '-o', 'jsonpath={.metadata.uid}']);
-  expect(uid, 'secret uid must be non-empty').toBeTruthy();
-
-  // 2. Verify k8s-watcher published an ADDED event to Kafka
-  const offsetAfter = await waitForKafkaEvent(offsetBefore, 10_000);
-  expect(offsetAfter, 'Kafka offset must advance after secret creation')
-    .toBeGreaterThan(offsetBefore);
-
-  // 3. CDC processing: embed + upsert safe Secret metadata into Qdrant
-  //    specJson reflects the safe spec that watcher.py produces for Secrets
-  const safeSpec = JSON.stringify({ type: 'Opaque', dataKeys: ['password', 'username'] });
-  await qdrantUpsert(request, uid, 'Secret', K8S_NAMESPACE, SECRET_NAME, {}, safeSpec, new Date().toISOString());
-
-  // 4. Verify the point is in Qdrant with kind=Secret and no secret values
-  const point = await qdrantGet(request, uid);
-  expect(point, 'Qdrant must contain the new secret').not.toBeNull();
-  expect(point.payload.kind).toBe('Secret');
-  expect(point.payload.name).toBe(SECRET_NAME);
-  expect(point.payload.namespace).toBe(K8S_NAMESPACE);
-  expect(point.vector).toHaveLength(768);
-
-  // Must NOT store raw secret values
-  const payloadStr = JSON.stringify(point.payload);
-  expect(payloadStr, 'Qdrant payload must not contain raw secret value "supersecret123"')
-    .not.toContain('supersecret123');
-
-  // Cleanup
-  kubectl(['-n', K8S_NAMESPACE, 'delete', 'secret', SECRET_NAME, '--ignore-not-found', '--wait=false']);
-});
-
-// ── Test 7: AI secrets query ──────────────────────────────────────────────────
+// ── Test 2: AI secrets query ──────────────────────────────────────────────────
+// Runs SECOND — also before CDC tests to avoid Ollama queue contention.
 test('AI: secrets query → returns Secret metadata without exposing values', async ({ request }) => {
   const QUERY = 'What secrets exist in the kube-system namespace?';
 
@@ -442,7 +300,147 @@ Rules:
   expect(answer, 'LLM response must not expose raw secret values').not.toMatch(/supersecret/);
 });
 
-// ── Test 5: Reset REST endpoint ───────────────────────────────────────────────
+// ── Test 3: Create namespace ──────────────────────────────────────────────────
+test('CDC: create namespace → Kafka event published + Qdrant insertion', async ({ request }) => {
+  const NS  = 'e2e-create-ns';
+
+  // Remove any leftover from a previous run
+  try { kubectl(['delete', 'namespace', NS, '--ignore-not-found', '--wait=false']); } catch { /* ok */ }
+  await sleep(500);
+
+  const offsetBefore = kafkaOffset();
+
+  // 1. Create namespace in kind
+  kubectl(['create', 'namespace', NS]);
+  const uid = kubectl(['get', 'namespace', NS, '-o', 'jsonpath={.metadata.uid}']);
+  expect(uid, 'namespace uid must be non-empty').toBeTruthy();
+
+  // 2. Verify k8s-watcher published an ADDED event to Kafka
+  const offsetAfter = await waitForKafkaEvent(offsetBefore, 10_000);
+  expect(offsetAfter, 'Kafka offset must advance after namespace creation')
+    .toBeGreaterThan(offsetBefore);
+
+  // 3. CDC processing: embed + upsert into Qdrant (simulates n8n CDC flow logic)
+  await qdrantUpsert(request, uid, 'Namespace', '', NS, {}, '{}', new Date().toISOString());
+
+  // 4. Verify the point is in Qdrant with correct payload
+  const point = await qdrantGet(request, uid);
+  expect(point, 'Qdrant must contain the new namespace').not.toBeNull();
+  expect(point.payload.kind).toBe('Namespace');
+  expect(point.payload.name).toBe(NS);
+  expect(point.vector).toHaveLength(768);
+
+  // Cleanup
+  kubectl(['delete', 'namespace', NS, '--ignore-not-found', '--wait=false']);
+});
+
+// ── Test 4: Update deployment → vector replacement ────────────────────────────
+test('CDC: update deployment → old vector replaced (dedup by resource_uid)', async ({ request }) => {
+  // Use the coredns deployment — always present in a kind cluster
+  const uid  = kubectl(['get', 'deployment', 'coredns', '-n', 'kube-system',
+                        '-o', 'jsonpath={.metadata.uid}']);
+  expect(uid, 'coredns deployment must exist').toBeTruthy();
+
+  // Seed an initial point so we have something to replace
+  const ts1 = new Date(Date.now() - 5_000).toISOString(); // 5 s in the past
+  await qdrantUpsert(request, uid, 'Deployment', 'kube-system', 'coredns',
+    { app: 'coredns' }, '{"replicas":2}', ts1);
+  const before = await qdrantGet(request, uid);
+  expect(before).not.toBeNull();
+  expect(before.payload.last_updated_timestamp).toBe(ts1);
+
+  // Trigger a MODIFIED event: annotate the deployment
+  const offsetBefore = kafkaOffset();
+  const marker = `e2e-${Date.now()}`;
+  kubectl(['annotate', 'deployment', 'coredns', '-n', 'kube-system',
+           `e2e-test=${marker}`, '--overwrite']);
+
+  // k8s-watcher should detect the MODIFIED event
+  const offsetAfter = await waitForKafkaEvent(offsetBefore, 10_000);
+  expect(offsetAfter, 'Kafka offset must advance after deployment annotation')
+    .toBeGreaterThan(offsetBefore);
+
+  // CDC processing: replace the vector (same uid → dedup)
+  const ts2 = new Date().toISOString();
+  await qdrantUpsert(request, uid, 'Deployment', 'kube-system', 'coredns',
+    { app: 'coredns' }, `{"replicas":2,"e2eMarker":"${marker}"}`, ts2);
+
+  // Verify the point was replaced, not duplicated
+  const after = await qdrantGet(request, uid);
+  expect(after).not.toBeNull();
+  expect(after.payload.kind).toBe('Deployment');
+  expect(after.payload.last_updated_timestamp).toBe(ts2);        // new timestamp
+  expect(after.payload.last_updated_timestamp).not.toBe(ts1);    // replaced, not the old one
+});
+
+// ── Test 5: Delete resource → removed from Qdrant ────────────────────────────
+test('CDC: delete resource → point removed from Qdrant vector store', async ({ request }) => {
+  // Use a synthetic but valid UUID so this test is self-contained
+  const uid = 'e2e10000-e2e1-4e2e-ae2e-e2e100000003';
+  const NS  = 'e2e-ephemeral';
+
+  // Seed the point
+  await qdrantUpsert(request, uid, 'Namespace', '', NS, {}, '{}', new Date().toISOString());
+  const before = await qdrantGet(request, uid);
+  expect(before, 'point must exist before deletion').not.toBeNull();
+
+  // CDC DELETE: remove from Qdrant by resource_uid
+  const del = await request.post(`${QDRANT}/collections/k8s/points/delete`, {
+    data: { points: [uid] },
+  });
+  expect(del.ok(), `Qdrant delete failed: ${del.status()}`).toBeTruthy();
+
+  // Verify the point is gone
+  const after = await qdrantGet(request, uid);
+  expect(after, 'point must be absent after deletion').toBeNull();
+});
+
+// ── Test 6: CDC Secret ────────────────────────────────────────────────────────
+test('CDC: create secret → Kafka event published + Qdrant insertion (safe metadata only)', async ({ request }) => {
+  const SECRET_NAME = 'e2e-test-secret';
+
+  // Remove any leftover from a previous run
+  try { kubectl(['-n', K8S_NAMESPACE, 'delete', 'secret', SECRET_NAME, '--ignore-not-found', '--wait=false']); } catch { /* ok */ }
+  await sleep(500);
+
+  const offsetBefore = kafkaOffset();
+
+  // 1. Create a secret with sensitive data in k8s-classic-ai namespace
+  kubectl(['-n', K8S_NAMESPACE, 'create', 'secret', 'generic', SECRET_NAME,
+    '--from-literal=username=admin', '--from-literal=password=supersecret123']);
+  const uid = kubectl(['-n', K8S_NAMESPACE, 'get', 'secret', SECRET_NAME,
+    '-o', 'jsonpath={.metadata.uid}']);
+  expect(uid, 'secret uid must be non-empty').toBeTruthy();
+
+  // 2. Verify k8s-watcher published an ADDED event to Kafka
+  const offsetAfter = await waitForKafkaEvent(offsetBefore, 10_000);
+  expect(offsetAfter, 'Kafka offset must advance after secret creation')
+    .toBeGreaterThan(offsetBefore);
+
+  // 3. CDC processing: embed + upsert safe Secret metadata into Qdrant
+  //    specJson reflects the safe spec that watcher.py produces for Secrets
+  const safeSpec = JSON.stringify({ type: 'Opaque', dataKeys: ['password', 'username'] });
+  await qdrantUpsert(request, uid, 'Secret', K8S_NAMESPACE, SECRET_NAME, {}, safeSpec, new Date().toISOString());
+
+  // 4. Verify the point is in Qdrant with kind=Secret and no secret values
+  const point = await qdrantGet(request, uid);
+  expect(point, 'Qdrant must contain the new secret').not.toBeNull();
+  expect(point.payload.kind).toBe('Secret');
+  expect(point.payload.name).toBe(SECRET_NAME);
+  expect(point.payload.namespace).toBe(K8S_NAMESPACE);
+  expect(point.vector).toHaveLength(768);
+
+  // Must NOT store raw secret values
+  const payloadStr = JSON.stringify(point.payload);
+  expect(payloadStr, 'Qdrant payload must not contain raw secret value "supersecret123"')
+    .not.toContain('supersecret123');
+
+  // Cleanup
+  kubectl(['-n', K8S_NAMESPACE, 'delete', 'secret', SECRET_NAME, '--ignore-not-found', '--wait=false']);
+});
+
+// ── Test 7: Reset REST endpoint ───────────────────────────────────────────────
+// Always runs LAST — wipes Qdrant which would invalidate any subsequent tests.
 test('Reset: POST /webhook/k8s-reset clears Qdrant and CDC resync repopulates', async ({ request }) => {
   // 1. Call the reset webhook
   const resetResp = await request.post(`${N8N}/webhook/k8s-reset`, {

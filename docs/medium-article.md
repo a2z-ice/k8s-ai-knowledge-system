@@ -35,7 +35,7 @@ A self-hosted **Kubernetes AI Knowledge System** with three core properties:
 | Chat model | Ollama + `qwen3:8b` | Generate natural-language responses |
 | K8s watcher | Python (`kubernetes` + `kafka-python`) | Watch K8s API, publish events to Kafka |
 | Kubernetes cluster | kind | Local cluster for development |
-| Container runtime | Kubernetes (kind) | All services run as pods in the `k8s-ai` namespace |
+| Container runtime | Kubernetes (kind) | All services run as pods in the `k8s-classic-ai` namespace |
 
 Everything runs on your laptop. No OpenAI key. No cloud egress.
 
@@ -69,7 +69,7 @@ User question
                         │  K8s Watch API (streaming, 9 resource types)
                         ▼
               ┌─────────────────────┐
-              │    k8s-watcher      │  Python, k8s-ai pod, NodePort 31002
+              │    k8s-watcher      │  Python, k8s-classic-ai pod, NodePort 31002
               │    9 watch threads  │  /healthz · /resync
               └──────────┬──────────┘
                          │  ADDED | MODIFIED | DELETED events (JSON)
@@ -82,7 +82,7 @@ User question
            ┌─────────────┘
            ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │               n8n: CDC_K8s_Flow                              │
+  │               n8n: classic_CDC_K8s_Flow                              │
   │  Kafka Trigger → Parse → Delete → Branch → Embed → Insert   │
   └────────────────────────────┬─────────────────────────────────┘
                                ▼
@@ -94,7 +94,7 @@ User question
                     ┌──────────┘
                     ▼
   ┌──────────────────────────────────────────────────────────────┐
-  │               n8n: AI_K8s_Flow                               │
+  │               n8n: classic_AI_K8s_Flow                               │
   │  Chat Trigger → Embed → Search → Build Prompt → LLM → Out   │
   └──────────────────────────────────────────────────────────────┘
                                │
@@ -102,7 +102,7 @@ User question
                     Browser / curl / any HTTP client
 
   ┌──────────────────────────────────────────────────────────────┐
-  │               n8n: Reset_K8s_Flow                            │
+  │               n8n: classic_Reset_K8s_Flow                            │
   │  POST /webhook/k8s-reset                                     │
   │    → DELETE Qdrant → PUT Qdrant → POST /resync → Response    │
   └──────────────────────────────────────────────────────────────┘
@@ -287,7 +287,7 @@ kubectl --context kind-k8s-ai-classic get nodes
 
 ### Deploy All Services to Kubernetes
 
-All four services (n8n, Qdrant, Kafka, k8s-watcher) run as pods inside the `k8s-ai` namespace. Deploy them in order:
+All four services (n8n, Qdrant, Kafka, k8s-watcher) run as pods inside the `k8s-classic-ai` namespace. Deploy them in order:
 
 ```bash
 # Namespace and persistent volumes (cluster-scoped)
@@ -296,27 +296,27 @@ kubectl --context kind-k8s-ai-classic apply -f infra/k8s/01-pvs.yaml
 
 # Kafka (n8n CDC depends on it — deploy first)
 kubectl --context kind-k8s-ai-classic apply -f infra/k8s/kafka/
-kubectl --context kind-k8s-ai-classic -n k8s-ai rollout status statefulset/kafka --timeout=120s
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai rollout status statefulset/kafka --timeout=120s
 
 # Qdrant
 kubectl --context kind-k8s-ai-classic apply -f infra/k8s/qdrant/
-kubectl --context kind-k8s-ai-classic -n k8s-ai rollout status deployment/qdrant --timeout=60s
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai rollout status deployment/qdrant --timeout=60s
 
 # k8s-watcher (build image first, then load into kind)
 docker build -t k8s-watcher-classic:latest ./k8s-watcher/
 kind load docker-image k8s-watcher-classic:latest --name k8s-ai-classic
 kubectl --context kind-k8s-ai-classic apply -f infra/k8s/k8s-watcher/
-kubectl --context kind-k8s-ai-classic -n k8s-ai rollout status deployment/k8s-watcher --timeout=90s
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai rollout status deployment/k8s-watcher --timeout=90s
 
 # n8n
 kubectl --context kind-k8s-ai-classic apply -f infra/k8s/n8n/
-kubectl --context kind-k8s-ai-classic -n k8s-ai rollout status deployment/n8n --timeout=120s
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai rollout status deployment/n8n --timeout=120s
 ```
 
 Wait for all pods to reach `Running` state:
 
 ```bash
-kubectl --context kind-k8s-ai-classic -n k8s-ai get pods
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pods
 # NAME                           READY   STATUS    RESTARTS
 # kafka-0                        1/1     Running   0
 # qdrant-xxxxx                   1/1     Running   0
@@ -482,25 +482,25 @@ For a manual import when the cluster is already running:
 
 ```bash
 # Get the n8n pod name
-N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=n8n \
+N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pod -l app=n8n \
   -o jsonpath='{.items[0].metadata.name}')
 
 # Copy workflow JSON files into the pod
-kubectl --context kind-k8s-ai-classic -n k8s-ai cp workflows/n8n_cdc_k8s_flow.json   ${N8N_POD}:/tmp/
-kubectl --context kind-k8s-ai-classic -n k8s-ai cp workflows/n8n_ai_k8s_flow.json    ${N8N_POD}:/tmp/
-kubectl --context kind-k8s-ai-classic -n k8s-ai cp workflows/n8n_reset_k8s_flow.json ${N8N_POD}:/tmp/
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai cp workflows/classic_n8n_cdc_k8s_flow.json   ${N8N_POD}:/tmp/
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai cp workflows/classic_n8n_ai_k8s_flow.json    ${N8N_POD}:/tmp/
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai cp workflows/classic_n8n_reset_k8s_flow.json ${N8N_POD}:/tmp/
 
 # Import them (IDs are static — embedded in the JSON files)
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_cdc_k8s_flow.json
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_ai_k8s_flow.json
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_reset_k8s_flow.json
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/classic_n8n_cdc_k8s_flow.json
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/classic_n8n_ai_k8s_flow.json
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/classic_n8n_reset_k8s_flow.json
 
 # Activate all three (IDs are fixed — no discovery step needed)
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sCDCflow00001
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sAIflow000001
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sRSTflow00001
-kubectl --context kind-k8s-ai-classic -n k8s-ai rollout restart deployment/n8n
-kubectl --context kind-k8s-ai-classic -n k8s-ai rollout status deployment/n8n --timeout=60s
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sCDCflow00001
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sAIflow000001
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sRSTflow00001
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai rollout restart deployment/n8n
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai rollout status deployment/n8n --timeout=60s
 ```
 
 > **Static workflow IDs:** The JSON files contain a hardcoded `id` field (`k8sCDCflow00001`, `k8sAIflow000001`, `k8sRSTflow00001`). Modern n8n (1.x+) uses this field on import — omitting it causes `SQLITE_CONSTRAINT: NOT NULL constraint failed: workflow_entity.id`.
@@ -519,7 +519,7 @@ To add your first node, press **Tab** or click the `+` button in the center of t
 
 The node creator shows a search bar and categorised node list. Type the node name to filter. The following screenshots show searches for each node type used across the three flows:
 
-**Searching "kafka trigger"** — the Kafka Trigger node (used in CDC_K8s_Flow):
+**Searching "kafka trigger"** — the Kafka Trigger node (used in classic_CDC_K8s_Flow):
 
 ![Node creator search results for "kafka trigger"](screenshots/create-03-search-kafka-trigger.png)
 
@@ -531,15 +531,15 @@ The node creator shows a search bar and categorised node list. Type the node nam
 
 ![Node creator search results for "code"](screenshots/create-05-search-code.png)
 
-**Searching "if"** — the If node (used in CDC_K8s_Flow to branch on event type):
+**Searching "if"** — the If node (used in classic_CDC_K8s_Flow to branch on event type):
 
 ![Node creator search results for "if"](screenshots/create-06-search-if.png)
 
-**Searching "webhook"** — the Webhook node (used in Reset_K8s_Flow as the entry point):
+**Searching "webhook"** — the Webhook node (used in classic_Reset_K8s_Flow as the entry point):
 
 ![Node creator search results for "webhook"](screenshots/create-07-search-webhook.png)
 
-**Searching "chat trigger"** — the Chat Trigger node (used in AI_K8s_Flow as the entry point):
+**Searching "chat trigger"** — the Chat Trigger node (used in classic_AI_K8s_Flow as the entry point):
 
 ![Node creator search results for "chat trigger"](screenshots/create-08-search-chat-trigger.png)
 
@@ -557,13 +557,13 @@ All three workflows carry the green **Published** badge. The execution count and
 
 ---
 
-## Flow 1: CDC_K8s_Flow — Continuous Indexing
+## Flow 1: classic_CDC_K8s_Flow — Continuous Indexing
 
 This is the backbone of the system. It runs permanently, consuming every Kubernetes change event from Kafka and keeping Qdrant in sync. Every resource change in the cluster is indexed within two seconds.
 
-**To create this flow:** In the n8n dashboard click **Add Workflow**, name it `CDC_K8s_Flow`, then add the seven nodes described below in left-to-right order. Connect them with edges (drag from the output dot of one node to the input dot of the next).
+**To create this flow:** In the n8n dashboard click **Add Workflow**, name it `classic_CDC_K8s_Flow`, then add the seven nodes described below in left-to-right order. Connect them with edges (drag from the output dot of one node to the input dot of the next).
 
-![CDC_K8s_Flow canvas — 7 nodes, Published badge visible](screenshots/05-cdc-workflow-canvas.png)
+![classic_CDC_K8s_Flow canvas — 7 nodes, Published badge visible](screenshots/05-cdc-workflow-canvas.png)
 
 The canvas shows seven nodes left-to-right. At the "Is Delete Event?" branch, the true path terminates (nothing to index) while the false path continues through embedding and insertion.
 
@@ -796,12 +796,12 @@ The `$json` reference carries the `{ "points": [...] }` object built by Node 6 d
 Save the workflow (Ctrl/Cmd + S), then activate it from the CLI:
 
 ```bash
-N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=n8n \
+N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pod -l app=n8n \
   -o jsonpath='{.items[0].metadata.name}')
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n list:workflow
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${N8N_POD} -- n8n list:workflow
 # note the CDC workflow ID
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=<CDC_ID>
-kubectl --context kind-k8s-ai-classic -n k8s-ai rollout restart deployment/n8n
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${N8N_POD} -- n8n publish:workflow --id=<CDC_ID>
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai rollout restart deployment/n8n
 ```
 
 ### CDC Flow in Action
@@ -816,13 +816,13 @@ Execution #277: all nodes show green checkmarks, "1 item" flows between each, an
 
 ---
 
-## Flow 2: AI_K8s_Flow — The Query Pipeline
+## Flow 2: classic_AI_K8s_Flow — The Query Pipeline
 
 This flow answers user questions. It is completely stateless — each question triggers one end-to-end execution that embeds the query, retrieves context from Qdrant, and calls the LLM.
 
-**To create this flow:** In the n8n dashboard click **Add Workflow**, name it `AI_K8s_Flow`, then add the six nodes described below.
+**To create this flow:** In the n8n dashboard click **Add Workflow**, name it `classic_AI_K8s_Flow`, then add the six nodes described below.
 
-![AI_K8s_Flow canvas — 6 nodes in a straight line, Published](screenshots/08-ai-workflow-canvas.png)
+![classic_AI_K8s_Flow canvas — 6 nodes in a straight line, Published](screenshots/08-ai-workflow-canvas.png)
 
 Six nodes, no branching. Every question flows through every node. The "Open chat" button at the bottom launches n8n's built-in chat UI connected to this flow's public webhook.
 
@@ -1041,10 +1041,10 @@ n8n's Chat Trigger automatically surfaces the top-level `output` field as the ch
 ### Activate the AI Flow
 
 ```bash
-N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=n8n \
+N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pod -l app=n8n \
   -o jsonpath='{.items[0].metadata.name}')
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=<AI_ID>
-kubectl --context kind-k8s-ai-classic -n k8s-ai rollout restart deployment/n8n
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${N8N_POD} -- n8n publish:workflow --id=<AI_ID>
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai rollout restart deployment/n8n
 ```
 
 ### The AI Flow in Action
@@ -1065,13 +1065,13 @@ The response arrives as a structured markdown table containing real namespace da
 
 ---
 
-## Flow 3: Reset_K8s_Flow — On-Demand Re-indexing
+## Flow 3: classic_Reset_K8s_Flow — On-Demand Re-indexing
 
 This utility flow solves a practical problem: sometimes you need to start completely fresh. New embedding model (incompatible vectors), cluster recreated, schema changed, or simply verifying the full pipeline from scratch. One HTTP call wipes Qdrant and triggers a complete re-index.
 
-**To create this flow:** In the n8n dashboard click **Add Workflow**, name it `Reset_K8s_Flow`, then add the five nodes described below.
+**To create this flow:** In the n8n dashboard click **Add Workflow**, name it `classic_Reset_K8s_Flow`, then add the five nodes described below.
 
-![Reset_K8s_Flow canvas — 5 nodes in a straight line, Published](screenshots/15-reset-workflow-canvas.png)
+![classic_Reset_K8s_Flow canvas — 5 nodes in a straight line, Published](screenshots/15-reset-workflow-canvas.png)
 
 Five nodes, no branching, response mode set to `Last Node` so the caller waits for confirmation that all steps completed before receiving the response.
 
@@ -1202,10 +1202,10 @@ return [{
 ### Activate the Reset Flow
 
 ```bash
-N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=n8n \
+N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pod -l app=n8n \
   -o jsonpath='{.items[0].metadata.name}')
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=<RESET_ID>
-kubectl --context kind-k8s-ai-classic -n k8s-ai rollout restart deployment/n8n
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${N8N_POD} -- n8n publish:workflow --id=<RESET_ID>
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai rollout restart deployment/n8n
 ```
 
 ### Reset Flow Execution History
@@ -1218,7 +1218,7 @@ Both executions in the history completed in under 100ms — the fast completion 
 
 ## End-to-End Test Suite
 
-Five Playwright tests (API mode — no browser required) verify the complete pipeline:
+Seven Playwright tests (API mode — no browser required) verify the complete pipeline:
 
 ```bash
 npm install
@@ -1227,24 +1227,32 @@ npm test
 ```
 
 ```
-  ✓  CDC: create namespace → Kafka event published + Qdrant insertion    (2.4s)
-  ✓  CDC: update deployment → old vector replaced (dedup by resource_uid) (1.9s)
-  ✓  CDC: delete resource → point removed from Qdrant vector store         (33ms)
-  ✓  AI: namespace count query → structured markdown table response        (2.2s)
-  ✓  Reset: POST /webhook/k8s-reset clears Qdrant and resync repopulates  (3.1s)
+  ✓  AI: namespace count query → structured markdown table response         (10.7s)
+  ✓  AI: secrets query → returns Secret metadata without exposing values    (1.1s)
+  ✓  CDC: create namespace → Kafka event published + Qdrant insertion       (2.5s)
+  ✓  CDC: update deployment → old vector replaced (dedup by resource_uid)   (1.9s)
+  ✓  CDC: delete resource → point removed from Qdrant vector store          (31ms)
+  ✓  CDC: create secret → Kafka event + Qdrant insertion (safe metadata only)(2.6s)
+  ✓  Reset: POST /webhook/k8s-reset clears Qdrant and resync repopulates   (3.4s)
 
-  5 passed (10.0s)
+  7 passed (22.7s)
 ```
 
-**Test 1** creates a real Kubernetes namespace, waits for the Kafka offset to advance (confirming k8s-watcher published the event), embeds the namespace metadata, inserts it into Qdrant, and verifies the 768-dim vector and correct payload are present.
+AI tests run first — before CDC tests trigger Ollama embed calls that would serialise with the AI tests' own embed+chat requests (`OLLAMA_NUM_PARALLEL=1`). Reset always runs last because it wipes Qdrant.
 
-**Test 2** annotates the `coredns` Deployment to trigger a MODIFIED event, waits for the Kafka offset, upserts a fresh vector, and verifies the timestamp changed — confirming the delete-before-insert deduplication works.
+**Test 1** embeds a natural-language question about namespaces, searches Qdrant, builds a prompt, calls Ollama (qwen3:8b) directly, and asserts the response contains a markdown table, mentions known namespaces (default, kube-system), and contains no hallucinated resources (Redis, MongoDB, Postgres).
 
-**Test 3** seeds a synthetic resource by UUID, calls the Qdrant delete endpoint, and asserts the point is gone.
+**Test 2** embeds a secrets query, searches Qdrant, verifies at least one kube-system Secret appears in results, calls Ollama, and asserts the LLM mentions secret names without ever exposing raw values.
 
-**Test 4** embeds a natural-language question, searches Qdrant, builds a prompt, calls Ollama directly, and asserts the response contains a markdown table, mentions known namespaces (default, kube-system, kube-public), and contains no hallucinated resources (Redis, MongoDB, Postgres).
+**Test 3** creates a real Kubernetes namespace, waits for the Kafka offset to advance (confirming k8s-watcher published the event), embeds the namespace metadata, inserts it into Qdrant, and verifies the 768-dim vector and correct payload are present.
 
-**Test 5** calls the reset webhook, verifies Qdrant immediately has 0 points, waits up to 90 seconds, and asserts at least 10 points are re-indexed.
+**Test 4** annotates the `coredns` Deployment to trigger a MODIFIED event, waits for the Kafka offset, upserts a fresh vector, and verifies the timestamp changed — confirming the delete-before-insert deduplication works.
+
+**Test 5** seeds a synthetic resource by UUID, calls the Qdrant delete endpoint, and asserts the point is gone.
+
+**Test 6** creates a Secret with sensitive literal values, waits for the Kafka offset, upserts safe metadata only (`{type, dataKeys}`) into Qdrant, and verifies the raw values are never stored.
+
+**Test 7** calls the reset webhook, verifies Qdrant immediately has 0 points, waits up to 90 seconds, and asserts at least 10 points are re-indexed.
 
 ---
 
@@ -1280,7 +1288,7 @@ Kubernetes automatically injects environment variables for every ClusterIP Servi
 
 | Symptom | Likely Cause | Fix |
 |---|---|---|
-| CDC flow not triggering | Pod not running | `kubectl -n k8s-ai get pods` — if not Running, `kubectl apply -f infra/k8s/` |
+| CDC flow not triggering | Pod not running | `kubectl -n k8s-classic-ai get pods` — if not Running, `kubectl apply -f infra/k8s/` |
 | LLM returns "No indexed resources" | Qdrant has 0 points | `curl -X POST http://localhost:31000/webhook/k8s-reset` then wait 45s |
 | Workflow webhooks return 404 | Workflows not active | `kubectl exec ${N8N_POD} -- n8n publish:workflow --id=...` then rollout restart |
 | Embedding scores all below 0.3 | embed_text format wrong | Verify natural-language sentence format in Parse Message node |

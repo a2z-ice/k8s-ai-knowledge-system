@@ -14,6 +14,6 @@ nodes:
         hostPort: 31002
         protocol: TCP
     extraMounts:
-      - hostPath: /Volumes/Other/rand/kind_vector_n8n/data
-        containerPath: /data
+      - hostPath: /Volumes/Other/rand/kind_vector_n8n/data-classic
+        containerPath: /data-classic
         readOnly: false

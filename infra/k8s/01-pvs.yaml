@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: n8n-pv
+  name: n8n-classic-pv
 spec:
   capacity:
     storage: 5Gi
@@ -9,16 +9,16 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   storageClassName: ""
   hostPath:
-    path: /data/n8n
+    path: /data-classic/n8n
     type: DirectoryOrCreate
   claimRef:
-    namespace: k8s-ai
-    name: n8n-pvc
+    namespace: k8s-classic-ai
+    name: n8n-classic-pvc
 ---
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: qdrant-pv
+  name: qdrant-classic-pv
 spec:
   capacity:
     storage: 10Gi
@@ -26,16 +26,16 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   storageClassName: ""
   hostPath:
-    path: /data/qdrant
+    path: /data-classic/qdrant
     type: DirectoryOrCreate
   claimRef:
-    namespace: k8s-ai
-    name: qdrant-pvc
+    namespace: k8s-classic-ai
+    name: qdrant-classic-pvc
 ---
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: kafka-pv
+  name: kafka-classic-pv
 spec:
   capacity:
     storage: 10Gi
@@ -43,8 +43,8 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   storageClassName: ""
   hostPath:
-    path: /data/kafka
+    path: /data-classic/kafka
     type: DirectoryOrCreate
   claimRef:
-    namespace: k8s-ai
-    name: kafka-pvc
+    namespace: k8s-classic-ai
+    name: kafka-classic-pvc

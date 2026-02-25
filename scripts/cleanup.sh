@@ -11,12 +11,12 @@
 #   -h, --help    Show this help text
 #
 # What this script removes:
-#   • kind cluster 'k8s-ai' (all pods, services, PVs)
+#   • kind cluster 'k8s-ai-classic' (all pods, services, PVs)
 #   • k8s-watcher-classic:latest Docker image (local)
 #   • Docker image cached layers for k8s-watcher
 #
 # What this script does NOT remove by default:
-#   • ./data/  — Kafka/Qdrant/n8n persistent data (preserved for re-use)
+#   • ./data-classic/  — Kafka/Qdrant/n8n persistent data (preserved for re-use)
 #   • Ollama models — these take a long time to re-download
 #   • npm node_modules
 #   • /etc/hosts entries
@@ -59,9 +59,9 @@ echo -e "    • kind cluster '${CLUSTER_NAME}'"
 echo -e "    • k8s-watcher-classic:latest Docker image"
 
 if [[ "${WIPE_DATA}" == "true" ]]; then
-  echo -e "    ${RED}• ./data/n8n/    (n8n SQLite DB, credentials, workflows)${NC}"
-  echo -e "    ${RED}• ./data/qdrant/  (all Qdrant vectors)${NC}"
-  echo -e "    ${RED}• ./data/kafka/   (all Kafka log segments)${NC}"
+  echo -e "    ${RED}• ./data-classic/n8n/    (n8n SQLite DB, credentials, workflows)${NC}"
+  echo -e "    ${RED}• ./data-classic/qdrant/  (all Qdrant vectors)${NC}"
+  echo -e "    ${RED}• ./data-classic/kafka/   (all Kafka log segments)${NC}"
   echo
   echo -e "  ${RED}${BOLD}WARNING: --wipe-data will permanently delete all persistent data.${NC}"
   echo -e "  ${RED}You will need to re-run the full setup to recover.${NC}"
@@ -98,7 +98,7 @@ fi
 if [[ "${WIPE_DATA}" == "true" ]]; then
   step "Wiping persistent data directories"
 
-  for dir in data/n8n data/qdrant data/kafka; do
+  for dir in data-classic/n8n data-classic/qdrant data-classic/kafka; do
     TARGET="${PROJECT_ROOT}/${dir}"
     if [[ -d "${TARGET}" ]]; then
       log "Removing ${dir}/ …"
@@ -117,7 +117,7 @@ echo -e "${BOLD}${GREEN}  Cleanup complete!${NC}"
 echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo
 if [[ "${WIPE_DATA}" == "false" ]]; then
-  echo -e "  ${CYAN}./data/ directories were preserved.${NC}"
+  echo -e "  ${CYAN}./data-classic/ directories were preserved.${NC}"
   echo -e "  Re-running setup will mount existing Kafka/Qdrant/n8n data."
   echo -e "  To wipe data on next cleanup: ./scripts/cleanup.sh --wipe-data"
 fi

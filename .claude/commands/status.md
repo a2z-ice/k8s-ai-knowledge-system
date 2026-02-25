@@ -4,22 +4,22 @@ Run a full health check of the Kubernetes AI Knowledge System and report the cur
 
 **Step 0 — Ensure pods are up:**
 ```bash
-kubectl --context kind-k8s-ai-classic -n k8s-ai get pods
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pods
 ```
 If any pod is not in "Running" state, run:
 ```bash
 kubectl --context kind-k8s-ai-classic apply -f infra/k8s/
 # then wait 30 seconds for startup
 ```
-Then re-check `kubectl -n k8s-ai get pods` to confirm all pods are Running before continuing.
+Then re-check `kubectl -n k8s-classic-ai get pods` to confirm all pods are Running before continuing.
 
 **Step 1 — Run all checks in parallel:**
 
 1. **Qdrant** — `curl -s http://localhost:31001/collections/k8s` — extract `points_count` and `status`
 2. **Kafka offset** — get kafka pod name then exec:
    ```bash
-   KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
-   kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${KAFKA_POD} -- kafka-get-offsets --bootstrap-server localhost:9092 --topic k8s-resources
+   KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
+   kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${KAFKA_POD} -- kafka-get-offsets --bootstrap-server localhost:9092 --topic k8s-resources
    ```
 3. **k8s-watcher health** — `curl -s http://localhost:31002/healthz` — verify `{"status":"ok"}`
 4. **Ollama models** — `curl -s http://localhost:11434/api/tags` — confirm `nomic-embed-text` and `qwen3:8b` are present

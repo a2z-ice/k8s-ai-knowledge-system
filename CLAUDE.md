@@ -15,6 +15,7 @@ Project-specific slash commands are in `.claude/commands/`. Use them to quickly 
 | `/reimport-workflows` | Reimport + reactivate all 3 n8n workflows from local JSON files |
 | `/test` | Run all 7 E2E tests (`npm test`) with prerequisite checks and failure diagnosis |
 | `/screenshots` | Capture all UI screenshots (`npm run screenshots`) and list output |
+| `/remember` | Save current session state to persistent memory (what was done, what's pending, next steps) |
 
 ---
 
@@ -48,9 +49,9 @@ kind_vector_n8n/
 │   └── specs/                       # Original specification documents
 │
 ├── workflows/
-│   ├── n8n_ai_k8s_flow.json         # AI query pipeline workflow
-│   ├── n8n_cdc_k8s_flow.json        # CDC sync pipeline workflow
-│   └── n8n_reset_k8s_flow.json      # Reset: wipe Qdrant + trigger CDC resync
+│   ├── classic_n8n_ai_k8s_flow.json         # AI query pipeline workflow
+│   ├── classic_n8n_cdc_k8s_flow.json        # CDC sync pipeline workflow
+│   └── classic_n8n_reset_k8s_flow.json      # Reset: wipe Qdrant + trigger CDC resync
 │
 ├── infra/
 │   ├── kind-config.yaml             # kind cluster config (extraPortMappings + extraMounts)
@@ -87,7 +88,7 @@ kind_vector_n8n/
 │   ├── capture-screenshots.ts       # Playwright script that generates docs/screenshots/
 │   └── screenshot.config.ts         # Playwright config for screenshot script
 │
-└── data/                            # Host volumes mounted into kind node via extraMounts
+└── data-classic/                    # Host volumes mounted into kind node via extraMounts
     ├── n8n/
     ├── qdrant/
     └── kafka/
@@ -108,8 +109,8 @@ kind_vector_n8n/
 
 ### Tear down everything
 ```bash
-./scripts/cleanup.sh             # delete kind cluster + k8s-watcher image (preserves ./data/)
-./scripts/cleanup.sh --wipe-data # also permanently delete ./data/ subdirs
+./scripts/cleanup.sh             # delete kind cluster + k8s-watcher image (preserves ./data-classic/)
+./scripts/cleanup.sh --wipe-data # also permanently delete ./data-classic/ subdirs
 ./scripts/cleanup.sh --yes       # skip confirmation prompt
 ```
 
@@ -135,7 +136,7 @@ npm test                           # all 7 tests
 npm run test:single "create namespace"   # single test by name
 ```
 
-**E2E test design:** Tests 1–4 and 6–7 simulate CDC processing inline (embed + upsert directly to Qdrant) — they do NOT depend on n8n workflows being active. Test 5 (`Reset`) does require the n8n reset webhook. If tests 1–4 pass but test 5 fails with 404, run `/reimport-workflows`. Tests 6–7 cover Secret watching: Test 6 verifies Kafka offset advances and Qdrant stores only safe Secret metadata (no values), Test 7 verifies the AI query pipeline surfaces Secret names without exposing raw values.
+**E2E test design:** Tests 1–2 (AI) and 3–6 (CDC) simulate or drive the pipeline directly — they do NOT depend on n8n workflows being active (CDC tests call Ollama embed and Qdrant directly). Test 7 (`Reset`) does require the n8n reset webhook. If tests 1–6 pass but test 7 fails with 404, run `/reimport-workflows`. Tests 1–2 are AI query tests: Test 1 (namespace count query → markdown table), Test 2 (secrets query → Secret metadata without values). Tests 3–6 are CDC tests: Test 3 (create namespace), Test 4 (update deployment), Test 5 (delete), Test 6 (create Secret — safe metadata only, no raw values).
 
 ### Capture UI screenshots
 ```bash
@@ -228,7 +229,7 @@ Collection `k8s`, 768-dim Cosine. Point ID = `resource_uid` (UUID from k8s). Pay
 | Embedding model | `nomic-embed-text:latest` (768-dim) |
 | Chat model | `qwen3:8b` |
 | kind cluster | `k8s-ai-classic` (context: `kind-k8s-ai-classic`) |
-| k8s namespace | `k8s-ai` |
+| k8s namespace | `k8s-classic-ai` |
 
 ### NodePort Assignments
 
@@ -266,7 +267,7 @@ Collection `k8s`, 768-dim Cosine. Point ID = `resource_uid` (UUID from k8s). Pay
 
 ## Known Operational Patterns
 
-- **Pods auto-restart** — Deployments have `restartPolicy: Always`. If Docker Desktop restarts, pods come back automatically after ~30s. Check: `kubectl -n k8s-ai get pods`. If pods are missing entirely, re-apply: `kubectl apply -f infra/k8s/`.
+- **Pods auto-restart** — Deployments have `restartPolicy: Always`. If Docker Desktop restarts, pods come back automatically after ~30s. Check: `kubectl -n k8s-classic-ai get pods`. If pods are missing entirely, re-apply: `kubectl apply -f infra/k8s/`.
 - **k8s-watcher image must be loaded into kind** — The image is `imagePullPolicy: Never`. After any `docker build`, run `kind load docker-image k8s-watcher-classic:latest --name k8s-ai-classic` before rolling out.
 - **Workflow active status** — `n8n list:workflow` does NOT show the active flag. The reliable check is webhook HTTP codes: AI chat (`/webhook/k8s-ai-chat/chat`) and Reset (`/webhook/k8s-reset`) must return 200. If they return 404, workflows are inactive — run `/reimport-workflows`.
 - **Qdrant repopulation after reset** — After `POST /webhook/k8s-reset`, Qdrant is empty for ~30–45 seconds while k8s-watcher republishes all resources. Do not run E2E tests until points_count ≥ 10.
@@ -278,12 +279,12 @@ Collection `k8s`, 768-dim Cosine. Point ID = `resource_uid` (UUID from k8s). Pay
 - **Static PV binding** — `storageClassName: ""` + `claimRef` pre-binds each PV to its specific PVC, preventing accidental cross-binding.
 - **Kafka `enableServiceLinks: false`** — Kubernetes auto-injects `KAFKA_PORT=tcp://...` into pods from the `kafka` ClusterIP Service. The CP Kafka startup script parses all `KAFKA_*` env vars and chokes on this URL-format value. Fixed by `enableServiceLinks: false` in the StatefulSet pod spec.
 - **Kafka + n8n initContainers** — Both use `busybox` initContainers to `chown -R 1000:1000` their data directories. Docker wrote these as root; both services run as uid 1000 in Kubernetes.
-- **Workflow IDs are now static** — each workflow JSON has a hardcoded `id` field (`k8sCDCflow00001`, `k8sAIflow000001`, `k8sRSTflow00001`). n8n uses the `id` from the JSON on import (required in n8n 1.x+ — importing without an `id` causes `SQLITE_CONSTRAINT: NOT NULL`). `setup.sh` step 10b deletes existing rows by both name and ID before re-importing, preventing duplicates.
+- **Workflow IDs are now static** — each workflow JSON has a hardcoded `id` field (`k8sCDCflow00001`, `k8sAIflow000001`, `k8sRSTflow00001`). n8n uses the `id` from the JSON on import (required in n8n 1.x+ — importing without an `id` causes `SQLITE_CONSTRAINT: NOT NULL`). `setup.sh` step 10b deletes existing rows by both name (`classic_CDC_K8s_Flow`, etc.) and ID before re-importing, preventing duplicates.
 - **n8n SQLite DB safety** — Direct sqlite3 writes MUST be done only when n8n is scaled to 0 replicas. Concurrent writes corrupt the database (`SQLITE_CORRUPT`). Protocol: `scale --replicas=0` → wait for pod termination → sqlite3 ops → `scale --replicas=1`.
-- **n8n credential encryption** — n8n uses OpenSSL-compatible AES-256-CBC (`EVP_BytesToKey` / MD5 key derivation) for credential encryption. Format: `base64("Salted__" + 8-byte-salt + AES-CBC-ciphertext)`. See the Python implementation in `scripts/setup.sh` step 10c. The encryption key lives in `data/n8n/config` (persists across `database.sqlite` deletions).
-- **CDC Kafka `autoOffsetReset: latest`** — The Kafka Trigger in CDC_K8s_Flow uses `autoOffsetReset: latest`. This ensures the CDC consumer only processes messages published after the workflow starts — it does NOT replay historical Kafka messages on each startup. Changing this to `earliest` causes CDC to replay the entire topic history on every n8n restart, filling Qdrant with stale/duplicate points and breaking E2E test 5 (which expects Qdrant to be empty immediately after reset).
+- **n8n credential encryption** — n8n uses OpenSSL-compatible AES-256-CBC (`EVP_BytesToKey` / MD5 key derivation) for credential encryption. Format: `base64("Salted__" + 8-byte-salt + AES-CBC-ciphertext)`. See the Python implementation in `scripts/setup.sh` step 10c. The encryption key lives in `data-classic/n8n/config` (persists across `database.sqlite` deletions).
+- **CDC Kafka `autoOffsetReset: latest`** — The Kafka Trigger in CDC_K8s_Flow uses `autoOffsetReset: latest`. This ensures the CDC consumer only processes messages published after the workflow starts — it does NOT replay historical Kafka messages on each startup. Changing this to `earliest` causes CDC to replay the entire topic history on every n8n restart, filling Qdrant with stale/duplicate points and breaking E2E test 7 (Reset — which expects Qdrant to be empty immediately after reset).
 - **`obj.kind` is always None in k8s-watcher** — The k8s Python client watch stream doesn't populate `obj.kind`, and `raw.get("kind", "")` is also empty. `obj_to_payload` resolves this via `kind = obj.kind or raw.get("kind", "") or kind_hint`, where `kind_hint` is the resource type label passed by both `watch_stream` and `resync_all`. The `kind` payload field is correctly set; the `embed_text` is also correct ("Kubernetes Secret named ..."). Do not call `obj_to_payload` without passing `kind_hint`.
 - **Secret-safe spec in k8s-watcher** — When `kind == "Secret"`, `obj_to_payload` replaces the spec with `{"type": raw.get("type", "Opaque"), "dataKeys": list(raw.get("data", {}).keys())}`. The base64-encoded values in `raw["data"]` are discarded. This applies to both `watch_stream` and `resync_all`.
-- **E2E test 4 limit=50** — Uses limit 50 (not 20) to ensure cluster-scoped resources rank in top results despite `kind=null` lowering their semantic similarity score.
-- **E2E test execution order** — Tests are defined in the spec file as 1, 2, 3, 4, 6, 7, 5. Playwright runs them in definition order, so Test 5 (Reset) always runs last. This is intentional: Reset wipes Qdrant, which would invalidate tests 6 and 7 if run after.
+- **E2E test 1 (AI namespace count) limit=50** — Uses limit 50 (not 20) to ensure cluster-scoped resources rank in top results despite `kind=null` lowering their semantic similarity score.
+- **E2E test execution order** — Tests run in definition order: AI tests (1 namespace-count, 2 secrets-query) first, then CDC tests (3 create-ns, 4 update-deploy, 5 delete, 6 secret), then Reset (7) last. AI tests run first to avoid Ollama queue contention: CDC tests trigger `nomic-embed-text` embed calls via n8n that serialise with the AI tests' own embed+chat calls (OLLAMA_NUM_PARALLEL=1). Reset always runs last — it wipes Qdrant, which would invalidate any test run after it.
 - **Dual NodePort services for Qdrant and k8s-watcher** — Each has both a ClusterIP service (for in-cluster access by name, e.g., `http://qdrant:6333`) and a separate NodePort service (`qdrant-nodeport`, `k8s-watcher-nodeport`) for host access. The ClusterIP services are what n8n workflow nodes reference; the NodePort services expose health/debug endpoints to the host.

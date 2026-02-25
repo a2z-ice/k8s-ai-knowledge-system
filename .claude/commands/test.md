@@ -4,7 +4,7 @@ Run the full E2E test suite for the Kubernetes AI Knowledge System and report re
 
 **Step 1 — Ensure pods are running:**
 ```bash
-kubectl --context kind-k8s-ai-classic -n k8s-ai get pods
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pods
 ```
 If any pod is not in "Running" state:
 ```bash
@@ -39,15 +39,15 @@ Expected: `5 passed` in under 120 s.
 
 **Step 4 — If any test fails, diagnose:**
 
-- **Test 1 (CDC create namespace)** → check k8s-watcher logs: `kubectl --context kind-k8s-ai-classic -n k8s-ai logs deployment/k8s-watcher --tail 30`
+- **Test 1 (CDC create namespace)** → check k8s-watcher logs: `kubectl --context kind-k8s-ai-classic -n k8s-classic-ai logs deployment/k8s-watcher --tail 30`
 - **Test 2 (CDC update deployment)** → check Kafka offset is advancing:
   ```bash
-  KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
-  kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${KAFKA_POD} -- kafka-get-offsets --bootstrap-server localhost:9092 --topic k8s-resources
+  KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
+  kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${KAFKA_POD} -- kafka-get-offsets --bootstrap-server localhost:9092 --topic k8s-resources
   ```
 - **Test 3 (CDC delete)** → check Qdrant API reachable: `curl -s http://localhost:31001/healthz`
 - **Test 4 (AI query)** → check Ollama is responding and Qdrant has ≥ 10 points
-- **Test 5 (Reset)** → check reset webhook returns 200; if 404, run `/reimport-workflows`; check n8n logs: `kubectl -n k8s-ai logs deployment/n8n --tail 50`
+- **Test 5 (Reset)** → check reset webhook returns 200; if 404, run `/reimport-workflows`; check n8n logs: `kubectl -n k8s-classic-ai logs deployment/n8n --tail 50`
 
 **Step 5 — Run a single test by name:**
 ```bash

@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: n8n
-  namespace: k8s-ai
+  namespace: k8s-classic-ai
 spec:
   replicas: 1
   selector:
@@ -64,4 +64,4 @@ spec:
       volumes:
         - name: n8n-data
           persistentVolumeClaim:
-            claimName: n8n-pvc
+            claimName: n8n-classic-pvc

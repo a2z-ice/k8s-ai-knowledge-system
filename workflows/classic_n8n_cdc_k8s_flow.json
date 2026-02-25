@@ -1,6 +1,6 @@
 {
   "id": "k8sCDCflow00001",
-  "name": "CDC_K8s_Flow",
+  "name": "classic_CDC_K8s_Flow",
   "nodes": [
     {
       "parameters": {

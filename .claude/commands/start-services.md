@@ -14,7 +14,7 @@ Start all Kubernetes services for the Kubernetes AI Knowledge System and verify 
 
 2. Wait 30 seconds for services to initialize, then check pod status:
    ```bash
-   kubectl --context kind-k8s-ai-classic -n k8s-ai get pods
+   kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pods
    ```
    Expected: all 4 pods (kafka-0, qdrant-*, k8s-watcher-*, n8n-*) in Running state.
 
@@ -45,8 +45,8 @@ Start all Kubernetes services for the Kubernetes AI Knowledge System and verify 
 
    **Kafka:**
    ```bash
-   KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
-   kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${KAFKA_POD} -- kafka-get-offsets \
+   KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
+   kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${KAFKA_POD} -- kafka-get-offsets \
      --bootstrap-server localhost:9092 --topic k8s-resources
    ```
 
@@ -60,7 +60,7 @@ Start all Kubernetes services for the Kubernetes AI Knowledge System and verify 
    ```bash
    docker build -t k8s-watcher-classic:latest ./k8s-watcher/
    kind load docker-image k8s-watcher-classic:latest --name k8s-ai-classic
-   kubectl --context kind-k8s-ai-classic -n k8s-ai rollout restart deployment/k8s-watcher
+   kubectl --context kind-k8s-ai-classic -n k8s-classic-ai rollout restart deployment/k8s-watcher
    ```
 
 6. Verify Ollama models are available on the host:
@@ -75,10 +75,10 @@ Start all Kubernetes services for the Kubernetes AI Knowledge System and verify 
 
 7. Check that n8n workflows are active:
    ```bash
-   N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=n8n -o jsonpath='{.items[0].metadata.name}')
-   kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n list:workflow
+   N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pod -l app=n8n -o jsonpath='{.items[0].metadata.name}')
+   kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${N8N_POD} -- n8n list:workflow
    ```
-   All three workflows (CDC_K8s_Flow, AI_K8s_Flow, Reset_K8s_Flow) should be present.
+   All three workflows (classic_CDC_K8s_Flow, classic_AI_K8s_Flow, classic_Reset_K8s_Flow) should be present.
    If webhooks return 404, run `/reimport-workflows`.
 
 8. If Qdrant has 0 points, trigger initial sync:

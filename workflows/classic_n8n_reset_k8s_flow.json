@@ -1,6 +1,6 @@
 {
   "id": "k8sRSTflow00001",
-  "name": "Reset_K8s_Flow",
+  "name": "classic_Reset_K8s_Flow",
   "nodes": [
     {
       "parameters": {

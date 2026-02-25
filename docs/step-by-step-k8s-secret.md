@@ -124,8 +124,8 @@ kind load docker-image k8s-watcher-classic:latest --name k8s-ai-classic
 kubectl --context kind-k8s-ai-classic apply -f infra/k8s/k8s-watcher/k8s-watcher-rbac.yaml
 
 # 4. Rolling restart to pick up new image
-kubectl --context kind-k8s-ai-classic -n k8s-ai rollout restart deployment/k8s-watcher
-kubectl --context kind-k8s-ai-classic -n k8s-ai rollout status deployment/k8s-watcher
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai rollout restart deployment/k8s-watcher
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai rollout status deployment/k8s-watcher
 
 # Confirm startup log:
 # "Watching 10 resource types on topic 'k8s-resources' (Secrets: key names only)"

@@ -2,7 +2,7 @@
 
 **Version:** 1.7
 **Date:** 2026-02-24
-**Environment:** macOS · Docker Desktop · kind v0.24+ · n8n (latest) · All services in-cluster (k8s-ai namespace)
+**Environment:** macOS · Docker Desktop · kind v0.24+ · n8n (latest) · All services in-cluster (k8s-classic-ai namespace)
 
 Complete step-by-step verification of the Kubernetes AI Knowledge System — from infrastructure health through to live CDC event observation and AI query validation in the n8n browser UI. Every command and browser step has been verified against the live running environment.
 
@@ -29,13 +29,13 @@ This single command:
 6. Creates the Qdrant collection (`k8s`, 768-dim Cosine)
 7. Sets up the n8n database: creates Kafka credential + imports and activates all 3 workflows
 8. Triggers Qdrant resync and waits for ≥ 10 points
-9. Runs `npm test` — all 5 E2E tests must pass
+9. Runs `npm test` — all 7 E2E tests must pass
 
 Expected output at the end:
 ```
 ━━━ Running E2E test suite ━━━
 ...
-  5 passed (18.0s)
+  7 passed (~23s)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Setup complete!
@@ -58,7 +58,7 @@ Expected output at the end:
 ./scripts/setup.sh --keep-cluster
 ```
 
-Reuses the existing `k8s-ai` kind cluster. Re-imports workflows, recreates the Kafka credential if needed, and runs the full E2E suite.
+Reuses the existing `k8s-classic-ai` kind cluster. Re-imports workflows, recreates the Kafka credential if needed, and runs the full E2E suite.
 
 ### 0.3 Skip tests during setup
 
@@ -69,8 +69,8 @@ Reuses the existing `k8s-ai` kind cluster. Re-imports workflows, recreates the K
 ### 0.4 Tear down everything
 
 ```bash
-./scripts/cleanup.sh              # delete kind cluster + k8s-watcher image; keeps ./data/
-./scripts/cleanup.sh --wipe-data  # also permanently delete ./data/ (Kafka, Qdrant, n8n state)
+./scripts/cleanup.sh              # delete kind cluster + k8s-watcher image; keeps ./data-classic/
+./scripts/cleanup.sh --wipe-data  # also permanently delete ./data-classic/ (Kafka, Qdrant, n8n state)
 ./scripts/cleanup.sh --yes        # skip confirmation prompt
 ```
 
@@ -82,7 +82,7 @@ Reuses the existing `k8s-ai` kind cluster. Re-imports workflows, recreates the K
 |--------|--------|
 | `--keep-cluster` | Reuse existing kind cluster; skip delete + create |
 | `--no-test` | Skip the final `npm test` run |
-| `--wipe-data` | *(cleanup only)* Delete `./data/` subdirs permanently |
+| `--wipe-data` | *(cleanup only)* Delete `./data-classic/` subdirs permanently |
 | `--yes` | *(cleanup only)* Skip confirmation prompt |
 
 ---
@@ -141,7 +141,7 @@ kind get clusters
 
 Expected output:
 ```
-k8s-ai
+k8s-classic-ai
 ```
 
 If absent, create it with the config file (required for NodePort mappings and data mounts):
@@ -171,10 +171,10 @@ Both of the following must be present:
 
 If either is missing: `ollama pull nomic-embed-text && ollama pull qwen3:8b`
 
-### 2.4 All 4 Pods Running in k8s-ai Namespace
+### 2.4 All 4 Pods Running in k8s-classic-ai Namespace
 
 ```bash
-kubectl --context kind-k8s-ai-classic -n k8s-ai get pods
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pods
 ```
 
 Expected — all 4 pods in `Running` state (1/1 Ready):
@@ -283,8 +283,8 @@ Expected: `{"status":"ok"}`
 ### A4. Kafka Broker
 
 ```bash
-KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${KAFKA_POD} -- \
+KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${KAFKA_POD} -- \
   kafka-broker-api-versions --bootstrap-server localhost:9092 2>/dev/null | head -2
 ```
 
@@ -305,8 +305,8 @@ Expected: `{"status":"ok"}`
 ### B1. Verify Kafka Topic
 
 ```bash
-KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${KAFKA_POD} -- \
+KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${KAFKA_POD} -- \
   kafka-topics --bootstrap-server localhost:9092 --list
 ```
 
@@ -315,8 +315,8 @@ Expected: `k8s-resources` appears in the list.
 ### B2. Check Message Count
 
 ```bash
-KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${KAFKA_POD} -- \
+KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${KAFKA_POD} -- \
   kafka-get-offsets --bootstrap-server localhost:9092 --topic k8s-resources
 ```
 
@@ -325,20 +325,20 @@ Expected: `k8s-resources:0:<N>` where N ≥ 35 (initial cluster snapshot publish
 ### B3. Verify Kafka Consumer Group (n8n CDC listener)
 
 ```bash
-KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${KAFKA_POD} -- \
+KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${KAFKA_POD} -- \
   kafka-consumer-groups --bootstrap-server localhost:9092 --list
 ```
 
-Expected: `n8n-cdc-consumer` is listed — confirming the CDC_K8s_Flow Kafka Trigger is actively listening.
+Expected: `n8n-cdc-consumer` is listed — confirming the classic_CDC_K8s_Flow Kafka Trigger is actively listening.
 
 ### B4. Live CDC Event Test (Two Terminals)
 
 **Terminal 1** — Watch for new Kafka messages:
 
 ```bash
-KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${KAFKA_POD} -- \
+KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${KAFKA_POD} -- \
   kafka-console-consumer \
   --bootstrap-server localhost:9092 \
   --topic k8s-resources \
@@ -409,9 +409,9 @@ Both workflows must show a green **Active** badge on the right side of their row
 
 | Workflow | Expected Status |
 |----------|----------------|
-| `CDC_K8s_Flow` | Active (green) |
-| `AI_K8s_Flow` | Active (green) |
-| `Reset_K8s_Flow` | Active (green) |
+| `classic_CDC_K8s_Flow` | Active (green) |
+| `classic_AI_K8s_Flow` | Active (green) |
+| `classic_Reset_K8s_Flow` | Active (green) |
 
 If any workflow shows as inactive, refer to the [Troubleshooting](#troubleshooting) section.
 
@@ -429,7 +429,7 @@ Both must return `200`.
 
 ## Section E — CDC Workflow Canvas (UI)
 
-Click on **CDC_K8s_Flow** in the workflow list to open the editor.
+Click on **classic_CDC_K8s_Flow** in the workflow list to open the editor.
 
 ![CDC workflow canvas — 7-node pipeline](screenshots/05-cdc-workflow-canvas.png)
 
@@ -458,7 +458,7 @@ Double-click the **Kafka Trigger** node. Confirm:
 | Credential | Kafka Local (kafka:9092) |
 | Auto Offset Reset | `latest` |
 
-> Note: `kafka:9092` is the ClusterIP service name — both n8n and k8s-watcher pods resolve it via kube-dns. `autoOffsetReset: latest` ensures CDC only processes messages published **after** the workflow starts, not historical replays. Using `earliest` would cause CDC to replay the entire Kafka topic on every n8n restart, breaking test 5 (which expects Qdrant to be empty immediately after reset).
+> Note: `kafka:9092` is the ClusterIP service name — both n8n and k8s-watcher pods resolve it via kube-dns. `autoOffsetReset: latest` ensures CDC only processes messages published **after** the workflow starts, not historical replays. Using `earliest` would cause CDC to replay the entire Kafka topic on every n8n restart, breaking test 7 (Reset — which expects Qdrant to be empty immediately after reset).
 
 ### E2. View CDC Execution History
 
@@ -559,7 +559,7 @@ Watch the execution list — a new row appears for the `DELETED` event. In the d
 
 ## Section G — AI Workflow Canvas (UI)
 
-Navigate back to the workflow list and click **AI_K8s_Flow**, or go directly to:
+Navigate back to the workflow list and click **classic_AI_K8s_Flow**, or go directly to:
 
 ```
 http://localhost:31000/workflow/k8sAIflow000001
@@ -622,7 +622,7 @@ Show me all deployments and their replica counts
 
 ![AI chat response showing deployment table](screenshots/11-ai-chat-response.png)
 
-A markdown table listing deployments in the cluster with their replica counts. The response includes resources from the `k8s-ai` namespace (n8n, qdrant, k8s-watcher deployments) plus kube-system (coredns) and local-path-storage.
+A markdown table listing deployments in the cluster with their replica counts. The response includes resources from the `k8s-classic-ai` namespace (n8n, qdrant, k8s-watcher deployments) plus kube-system (coredns) and local-path-storage.
 
 ### H2. Test Query 2 — Namespace Listing
 
@@ -630,7 +630,7 @@ A markdown table listing deployments in the cluster with their replica counts. T
 List all namespaces in the Kubernetes cluster
 ```
 
-**Expected:** A markdown table with the cluster namespaces: `default`, `kube-system`, `kube-public`, `kube-node-lease`, `local-path-storage`, `k8s-ai`.
+**Expected:** A markdown table with the cluster namespaces: `default`, `kube-system`, `kube-public`, `kube-node-lease`, `local-path-storage`, `k8s-classic-ai`.
 
 ### H3. Test Query 3 — Pod Count by Namespace
 
@@ -648,13 +648,13 @@ Is there a Redis deployment in the cluster?
 
 **Expected:** The system must report that no Redis resources exist. The response must **not** describe any Redis deployment, service, or workload.
 
-### H5. Test Query 5 — k8s-ai Namespace Self-Indexing
+### H5. Test Query 5 — k8s-classic-ai Namespace Self-Indexing
 
 ```
-Is there an n8n deployment in the k8s-ai namespace?
+Is there an n8n deployment in the k8s-classic-ai namespace?
 ```
 
-**Expected:** The system confirms the n8n Deployment exists in the `k8s-ai` namespace — verifying that k8s-watcher indexes the cluster it is running inside.
+**Expected:** The system confirms the n8n Deployment exists in the `k8s-classic-ai` namespace — verifying that k8s-watcher indexes the cluster it is running inside.
 
 ### H6. Verify AI Execution in n8n (In-Browser)
 
@@ -720,7 +720,7 @@ print(resp['message']['content'])
 EOF
 ```
 
-**Expected:** Step 2 shows Deployment entries from multiple namespaces (k8s-ai, kube-system, local-path-storage). The LLM response is a markdown table listing all deployments with their replica counts.
+**Expected:** Step 2 shows Deployment entries from multiple namespaces (k8s-classic-ai, kube-system, local-path-storage). The LLM response is a markdown table listing all deployments with their replica counts.
 
 ---
 
@@ -741,18 +741,22 @@ npm test
 Expected output:
 
 ```
-Running 5 tests using 1 worker
+Running 7 tests using 1 worker
 
-  ✓  1 [api] › CDC: create namespace → Kafka event published + Qdrant insertion (2.9s)
-  ✓  2 [api] › CDC: update deployment → old vector replaced (dedup by resource_uid) (1.9s)
-  ✓  3 [api] › CDC: delete resource → point removed from Qdrant vector store (24ms)
-  ✓  4 [api] › AI: namespace count query → structured markdown table response (3.3s)
-  ✓  5 [api] › Reset: POST /webhook/k8s-reset clears Qdrant and CDC resync repopulates (3.4s)
+  ✓  1 [api] › AI: namespace count query → structured markdown table response (10.7s)
+  ✓  2 [api] › AI: secrets query → returns Secret metadata without exposing values (1.1s)
+  ✓  3 [api] › CDC: create namespace → Kafka event published + Qdrant insertion (2.5s)
+  ✓  4 [api] › CDC: update deployment → old vector replaced (dedup by resource_uid) (1.9s)
+  ✓  5 [api] › CDC: delete resource → point removed from Qdrant vector store (31ms)
+  ✓  6 [api] › CDC: create secret → Kafka event + Qdrant insertion (safe metadata only) (2.6s)
+  ✓  7 [api] › Reset: POST /webhook/k8s-reset clears Qdrant and CDC resync repopulates (3.4s)
 
-  5 passed (12.0s)
+  7 passed (22.7s)
 ```
 
-All 5 tests must pass. Total runtime is typically under 30 seconds.
+All 7 tests must pass. Total runtime is typically under 30 seconds.
+
+> **Test execution order:** AI tests (1–2) run first — before CDC tests (3–6) trigger Ollama embed calls that would serialise with the AI tests' own embed+chat requests (`OLLAMA_NUM_PARALLEL=1`). Reset (7) always runs last because it wipes Qdrant.
 
 ### J3. Run a Single Test
 
@@ -779,16 +783,16 @@ print('Qdrant points:', d['result']['points_count'])
 "
 
 # Kafka offset
-KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${KAFKA_POD} -- \
+KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${KAFKA_POD} -- \
   kafka-get-offsets --bootstrap-server localhost:9092 --topic k8s-resources
 ```
 
 ### K2. Simulate a Restart by Rolling All Deployments
 
 ```bash
-kubectl --context kind-k8s-ai-classic -n k8s-ai rollout restart deployment/n8n deployment/qdrant deployment/k8s-watcher
-kubectl --context kind-k8s-ai-classic -n k8s-ai rollout restart statefulset/kafka
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai rollout restart deployment/n8n deployment/qdrant deployment/k8s-watcher
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai rollout restart statefulset/kafka
 ```
 
 Wait 30–60 seconds for all pods to come back.
@@ -804,23 +808,23 @@ print('Qdrant points:', d['result']['points_count'])
 "
 
 # Kafka — offset unchanged (data on hostPath PV)
-KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${KAFKA_POD} -- \
+KAFKA_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pod -l app=kafka -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${KAFKA_POD} -- \
   kafka-get-offsets --bootstrap-server localhost:9092 --topic k8s-resources
 
 # n8n — workflows reactivate on startup
-N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=n8n -o jsonpath='{.items[0].metadata.name}')
-kubectl --context kind-k8s-ai-classic -n k8s-ai logs ${N8N_POD} | grep "Activated workflow"
+N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pod -l app=n8n -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai logs ${N8N_POD} | grep "Activated workflow"
 ```
 
 Expected:
-- Qdrant: same point count (hostPath PV at `./data/qdrant` persisted)
-- Kafka: same offset (hostPath PV at `./data/kafka` persisted)
+- Qdrant: same point count (hostPath PV at `./data-classic/qdrant` persisted)
+- Kafka: same offset (hostPath PV at `./data-classic/kafka` persisted)
 - n8n logs:
   ```
-  Activated workflow "CDC_K8s_Flow" (ID: k8sCDCflow00001)
-  Activated workflow "AI_K8s_Flow" (ID: k8sAIflow000001)
-  Activated workflow "Reset_K8s_Flow" (ID: k8sRSTflow00001)
+  Activated workflow "classic_CDC_K8s_Flow" (ID: k8sCDCflow00001)
+  Activated workflow "classic_AI_K8s_Flow" (ID: k8sAIflow000001)
+  Activated workflow "classic_Reset_K8s_Flow" (ID: k8sRSTflow00001)
   ```
 
 ---
@@ -908,8 +912,8 @@ Expected: ≥ 25 points after 30–60 seconds.
 
 1. Navigate to **http://localhost:31000** and sign in.
 2. Click **Workflows** in the left sidebar.
-3. Confirm **Reset_K8s_Flow** is shown with a green **Active** badge.
-4. Click **Reset_K8s_Flow** to open the canvas.
+3. Confirm **classic_Reset_K8s_Flow** is shown with a green **Active** badge.
+4. Click **classic_Reset_K8s_Flow** to open the canvas.
 
 > **Screenshot:** `docs/screenshots/15-reset-workflow-canvas.png`
 
@@ -936,7 +940,7 @@ Expected: JSON response with a markdown table listing your Kubernetes deployment
 
 | # | Check | Command / Action | Expected |
 |---|-------|-----------------|----------|
-| 1 | All 4 pods Running | `kubectl -n k8s-ai get pods` | All `Running` 1/1 |
+| 1 | All 4 pods Running | `kubectl -n k8s-classic-ai get pods` | All `Running` 1/1 |
 | 2 | Qdrant green, ≥ 25 points | `curl localhost:31001/collections/k8s` | `status: green` |
 | 3 | Ollama models present | `ollama list` | `nomic-embed-text`, `qwen3:8b` |
 | 4 | CDC workflow active | webhook HTTP 200 | `curl localhost:31000/webhook/k8s-ai-chat/chat` → 200 |
@@ -946,14 +950,14 @@ Expected: JSON response with a markdown table listing your Kubernetes deployment
 | 8 | CDC execution visible in n8n | Section F3 | New green row in execution list |
 | 9 | CDC data in Qdrant | Section F4 | Point found by resource UID |
 | 10 | Deployment query returns table | Section H1 / I1 | Table with replica counts |
-| 11 | Namespace query returns table | Section H2 | Table including `k8s-ai` namespace |
+| 11 | Namespace query returns table | Section H2 | Table including `k8s-classic-ai` namespace |
 | 12 | Hallucination guard passes | Section H4 | No Redis resources described |
 | 13 | AI execution appears in n8n | Section H6 | New row per chat query |
 | 14 | k8s-watcher healthz responds | `curl localhost:31002/healthz` | `{"status":"ok"}` |
 | 15 | Reset clears Qdrant | Section L3–L4 | 0 points immediately after reset |
 | 16 | CDC resync repopulates | Section L5 | ≥ 25 points after ~60 s |
 | 17 | Reset workflow active in n8n | Section L6 | Green badge + success execution |
-| 18 | Automated suite passes | `npm test` | `5 passed` |
+| 18 | Automated suite passes | `npm test` | `7 passed` |
 | 19 | Data survives pod restart | Section K | Point count and offset unchanged |
 
 ---
@@ -965,11 +969,11 @@ Expected: JSON response with a markdown table listing your Kubernetes deployment
 Reactivate via CLI (the n8n 2.6.4 body-parser bug prevents REST API activation when basic auth is enabled):
 
 ```bash
-N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=n8n -o jsonpath='{.items[0].metadata.name}')
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sCDCflow00001
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sAIflow000001
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sRSTflow00001
-kubectl --context kind-k8s-ai-classic -n k8s-ai rollout restart deployment/n8n
+N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pod -l app=n8n -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sCDCflow00001
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sAIflow000001
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sRSTflow00001
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai rollout restart deployment/n8n
 ```
 
 ### Qdrant returns 0 results
@@ -988,8 +992,8 @@ Check that the image is loaded into kind:
 
 ```bash
 kind load docker-image k8s-watcher-classic:latest --name k8s-ai-classic
-kubectl --context kind-k8s-ai-classic -n k8s-ai rollout restart deployment/k8s-watcher
-kubectl --context kind-k8s-ai-classic -n k8s-ai logs deployment/k8s-watcher --tail=30
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai rollout restart deployment/k8s-watcher
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai logs deployment/k8s-watcher --tail=30
 ```
 
 ### Kafka pod in CrashLoopBackOff
@@ -998,7 +1002,7 @@ Common causes and fixes:
 
 ```bash
 # Check logs
-kubectl --context kind-k8s-ai-classic -n k8s-ai logs kafka-0 --previous 2>&1 | head -30
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai logs kafka-0 --previous 2>&1 | head -30
 
 # If "enableServiceLinks" not set (KAFKA_PORT service link injection):
 # Ensure enableServiceLinks: false is in kafka-statefulset.yaml and re-apply
@@ -1008,7 +1012,7 @@ kubectl --context kind-k8s-ai-classic -n k8s-ai logs kafka-0 --previous 2>&1 | h
 
 # Force pod recreation after manifest update:
 kubectl --context kind-k8s-ai-classic apply -f infra/k8s/kafka/kafka-statefulset.yaml
-kubectl --context kind-k8s-ai-classic -n k8s-ai delete pod kafka-0
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai delete pod kafka-0
 ```
 
 ### Public chat returns 404 or blank page
@@ -1022,11 +1026,11 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:31000/webhook/k8s-ai-cha
 If 404 → run `/reimport-workflows`:
 
 ```bash
-N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-ai get pod -l app=n8n -o jsonpath='{.items[0].metadata.name}')
-kubectl --context kind-k8s-ai-classic -n k8s-ai cp workflows/n8n_ai_k8s_flow.json ${N8N_POD}:/tmp/
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/n8n_ai_k8s_flow.json
-kubectl --context kind-k8s-ai-classic -n k8s-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sAIflow000001
-kubectl --context kind-k8s-ai-classic -n k8s-ai rollout restart deployment/n8n
+N8N_POD=$(kubectl --context kind-k8s-ai-classic -n k8s-classic-ai get pod -l app=n8n -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai cp workflows/classic_n8n_ai_k8s_flow.json ${N8N_POD}:/tmp/
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${N8N_POD} -- n8n import:workflow --input=/tmp/classic_n8n_ai_k8s_flow.json
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai exec ${N8N_POD} -- n8n publish:workflow --id=k8sAIflow000001
+kubectl --context kind-k8s-ai-classic -n k8s-classic-ai rollout restart deployment/n8n
 ```
 
 ### AI chat returns "No indexed Kubernetes resources found"

@@ -1,6 +1,6 @@
 {
   "id": "k8sAIflow000001",
-  "name": "AI_K8s_Flow",
+  "name": "classic_AI_K8s_Flow",
   "nodes": [
     {
       "parameters": {
