@@ -10,7 +10,7 @@
       "typeVersion": 1,
       "position": [
         180,
-        160
+        200
       ]
     },
     {
@@ -26,7 +26,7 @@
       "typeVersion": 1,
       "position": [
         180,
-        300
+        380
       ],
       "webhookId": "k8s-reset"
     },
@@ -41,8 +41,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [
-        400,
-        300
+        460,
+        280
       ]
     },
     {
@@ -59,8 +59,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [
-        620,
-        300
+        700,
+        280
       ]
     },
     {
@@ -74,8 +74,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [
-        840,
-        300
+        940,
+        280
       ]
     },
     {
@@ -87,8 +87,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1060,
-        300
+        1180,
+        280
       ]
     }
   ],
