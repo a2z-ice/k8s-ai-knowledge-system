@@ -59,7 +59,7 @@ This single command handles everything end-to-end:
 6. Injects the Kafka credential into the n8n SQLite database
 7. Imports and activates all 3 workflows
 8. Triggers an initial resync and waits for Qdrant to populate (≥ 10 points)
-9. Runs `npm test` — all 7 E2E tests must pass
+9. Runs `npm test` — all 8 E2E tests must pass
 
 Expected completion time: ~4 minutes on a fast machine.
 
@@ -72,8 +72,9 @@ Expected completion time: ~4 minutes on a fast machine.
   ✓  5  CDC: delete resource → point removed from Qdrant vector store           (31ms)
   ✓  6  CDC: create secret → Kafka event + Qdrant insertion (safe metadata only)(2.6s)
   ✓  7  Reset: POST /webhook/k8s-reset clears Qdrant and CDC resync repopulates (3.4s)
+  ✓  8  Reset: Manual Trigger (REST API) → mode=manual, Qdrant repopulated      (4.3s)
 
-  7 passed (22.7s)
+  8 passed (27.0s)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Setup complete!
@@ -121,10 +122,25 @@ curl -X POST http://localhost:31000/webhook/k8s-ai-chat/chat \
 
 ### Reset & Resync Vector Database
 
+Via webhook (external HTTP POST):
 ```bash
 curl -X POST http://localhost:31000/webhook/k8s-reset \
   -H 'Content-Type: application/json' -d '{}'
 # Qdrant repopulates in ~30–45 s
+```
+
+Via Manual Trigger node (n8n editor UI or REST API — same pipeline):
+```bash
+# Open http://localhost:31000/workflow/k8sRSTflow00001 and click "Execute Workflow"
+# — or use the REST API directly (as done by Test 8):
+curl -s -X POST http://localhost:31000/rest/login \
+  -H 'Content-Type: application/json' -u admin:admin \
+  -d '{"emailOrLdapLoginId":"assaduzzaman.ict@gmail.com","password":"admin@123Normal"}' -c /tmp/n8n-cookies.txt
+curl -s http://localhost:31000/rest/workflows/k8sRSTflow00001 -u admin:admin -b /tmp/n8n-cookies.txt \
+  | python3 -c "import sys,json; wf=json.load(sys.stdin)['data']; print(json.dumps(wf))" > /tmp/wf.json
+curl -s -X POST http://localhost:31000/rest/workflows/k8sRSTflow00001/run -u admin:admin \
+  -b /tmp/n8n-cookies.txt -H 'Content-Type: application/json' \
+  -d "{\"workflowData\":$(cat /tmp/wf.json),\"startNodes\":[],\"triggerToStartFrom\":{\"name\":\"Manual Trigger\"}}"
 ```
 
 ### k8s-watcher Health Check
@@ -151,8 +167,9 @@ Workflow IDs are **static** — embedded in the JSON files. n8n 1.x+ uses the `i
 ## Running Tests
 
 ```bash
-npm test                                # all 7 E2E tests
+npm test                                # all 8 E2E tests
 npm run test:single "create namespace"  # single test by name
+npm run test:single "Reset: Manual"     # Test 8 only
 ```
 
 Capture UI screenshots:
@@ -174,7 +191,7 @@ N8N_EMAIL=assaduzzaman.ict@gmail.com N8N_PASS=admin@123Normal npm run screenshot
 │   ├── kind-config.yaml          # kind cluster config (NodePorts + data mounts)
 │   ├── k8s/                      # Kubernetes manifests
 │   └── schemas/                  # Qdrant collection schema
-├── tests/e2e/          # Playwright E2E test suite (5 tests, API mode)
+├── tests/e2e/          # Playwright E2E test suite (8 tests, API mode)
 ├── prompts/            # LLM system prompt
 └── docs/
     ├── manual-test.md  # Step-by-step manual test guide
@@ -208,6 +225,6 @@ When using [Claude Code](https://claude.ai/code) in this repo, these project-spe
 | `/start-services` | Apply k8s manifests and verify all components are healthy |
 | `/reset-db` | Wipe Qdrant + trigger CDC resync |
 | `/reimport-workflows` | Reimport + reactivate all 3 n8n workflows |
-| `/test` | Run all 7 E2E tests with diagnostic output |
+| `/test` | Run all 8 E2E tests with diagnostic output |
 | `/screenshots` | Capture all UI screenshots |
 | `/remember` | Save current session state to persistent memory |

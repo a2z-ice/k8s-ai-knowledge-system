@@ -13,9 +13,28 @@ Project-specific slash commands are in `.claude/commands/`. Use them to quickly 
 | `/start-services` | Apply k8s manifests and verify all components are healthy |
 | `/reset-db` | Wipe Qdrant vector DB and trigger CDC resync via `/webhook/k8s-reset` |
 | `/reimport-workflows` | Reimport + reactivate all 3 n8n workflows from local JSON files |
-| `/test` | Run all 7 E2E tests (`npm test`) with prerequisite checks and failure diagnosis |
+| `/test` | Run all 8 E2E tests (`npm test`) with prerequisite checks and failure diagnosis |
 | `/screenshots` | Capture all UI screenshots (`npm run screenshots`) and list output |
 | `/remember` | Save current session state to persistent memory (what was done, what's pending, next steps) |
+
+---
+
+## Prerequisites
+
+| Tool | Version | Notes |
+|------|---------|-------|
+| Docker Desktop | 4.x+ | Required for kind |
+| kind | 0.24+ | `brew install kind` |
+| kubectl | any | |
+| Ollama | any | Runs on host only — never in a pod |
+| Node.js | 18+ | For tests and screenshots |
+| python3 | 3.8+ | For k8s-watcher local dev |
+
+Pull Ollama models once (host machine):
+```bash
+ollama pull nomic-embed-text   # ~274 MB
+ollama pull qwen3:8b           # ~5.2 GB
+```
 
 ---
 
@@ -28,7 +47,7 @@ docs/plans/
   1. Kubernetes AI Knowledge System.md
   2. Kubernetes In-Cluster Migration.md
   3. Add Secret Resource Watching.md
-  4. <next plan title>.md
+  4. <next new plan — create this file before starting significant work>
 ```
 
 When starting a new significant piece of work, create the next numbered plan file before implementing.
@@ -132,11 +151,18 @@ npx playwright install chromium
 
 ### Run E2E tests
 ```bash
-npm test                           # all 7 tests
+npm test                           # all 8 tests
 npm run test:single "create namespace"   # single test by name
 ```
 
-**E2E test design:** Tests 1–2 (AI) and 3–6 (CDC) simulate or drive the pipeline directly — they do NOT depend on n8n workflows being active (CDC tests call Ollama embed and Qdrant directly). Test 7 (`Reset`) does require the n8n reset webhook. If tests 1–6 pass but test 7 fails with 404, run `/reimport-workflows`. Tests 1–2 are AI query tests: Test 1 (namespace count query → markdown table), Test 2 (secrets query → Secret metadata without values). Tests 3–6 are CDC tests: Test 3 (create namespace), Test 4 (update deployment), Test 5 (delete), Test 6 (create Secret — safe metadata only, no raw values).
+**E2E test design:** Tests 1–2 (AI) and 3–6 (CDC) simulate or drive the pipeline directly — they do NOT depend on n8n workflows being active (CDC tests call Ollama embed and Qdrant directly). Tests 7–8 (`Reset`) require the n8n reset workflow to be active. If tests 1–6 pass but test 7 fails with 404, run `/reimport-workflows`. Tests 1–2 are AI query tests: Test 1 (namespace count query → markdown table), Test 2 (secrets query → Secret metadata without values). Tests 3–6 are CDC tests: Test 3 (create namespace), Test 4 (update deployment), Test 5 (delete), Test 6 (create Secret — safe metadata only, no raw values). Test 7 (`Reset: POST`) — webhook trigger path. Test 8 (`Reset: Manual Trigger`) — exercises the Manual Trigger node via the n8n REST API (`POST /rest/workflows/k8sRSTflow00001/run` with `triggerToStartFrom: { name: "Manual Trigger" }`), verifies `mode=manual` in the execution record, and waits for Qdrant repopulation.
+
+### Query the AI chat endpoint
+```bash
+curl -X POST http://localhost:31000/webhook/k8s-ai-chat/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"chatInput": "Show me all deployments and their replica counts"}'
+```
 
 ### Capture UI screenshots
 ```bash
@@ -261,7 +287,8 @@ Collection `k8s`, 768-dim Cosine. Point ID = `resource_uid` (UUID from k8s). Pay
 - Kubernetes cluster must be **kind** only. Cluster created with `infra/kind-config.yaml` (required for NodePort mappings and data volume mounts).
 - Ollama runs on the **host machine** — never in a pod. All pods reach it via `host.docker.internal:11434` (mapped via `hostAliases` to `192.168.1.154`).
 - Kafka uses **KRaft mode** (no ZooKeeper).
-- **n8n 2.6.4 known bug:** `N8N_BASIC_AUTH_ACTIVE=true` causes body-parser to reject all POST/PATCH requests to `/rest/*`. Workflow activation must use `n8n publish:workflow` CLI, not the REST API or browser UI.
+- **n8n 2.9.4 (deployed version):** `N8N_BASIC_AUTH_ACTIVE=true` causes body-parser to reject all POST/PATCH requests to `/rest/*` during setup. Workflow activation must use `n8n publish:workflow` CLI, not the REST API. Exception: after the workflow is active, `/rest/workflows/{id}/run` works correctly (used by Test 8).
+- **`n8n execute` CLI port conflict** — `n8n execute --id <id>` always tries to bind port 5679 (Task Broker), conflicting with the already-running n8n server. No env var override suppresses this (`N8N_TASK_BROKER_PORT`, `N8N_RUNNERS_ENABLED=false` both fail). Use the REST API instead: `POST /rest/workflows/{id}/run` with `triggerToStartFrom: { name: "Manual Trigger" }`.
 - Qdrant score threshold is **0.3** — `nomic-embed-text` scores in the 0.38–0.70 range for k8s metadata. Deployment resources score ~0.43 for deployment-related queries; the previous 0.45 threshold silently filtered them out, causing "No results" LLM responses. 0.3 ensures all resource types are included.
 - `/etc/hosts` entry required on any machine accessing the n8n dashboard by domain: `192.168.1.154 n8n.genai.prod`.
 
@@ -286,5 +313,6 @@ Collection `k8s`, 768-dim Cosine. Point ID = `resource_uid` (UUID from k8s). Pay
 - **`obj.kind` is always None in k8s-watcher** — The k8s Python client watch stream doesn't populate `obj.kind`, and `raw.get("kind", "")` is also empty. `obj_to_payload` resolves this via `kind = obj.kind or raw.get("kind", "") or kind_hint`, where `kind_hint` is the resource type label passed by both `watch_stream` and `resync_all`. The `kind` payload field is correctly set; the `embed_text` is also correct ("Kubernetes Secret named ..."). Do not call `obj_to_payload` without passing `kind_hint`.
 - **Secret-safe spec in k8s-watcher** — When `kind == "Secret"`, `obj_to_payload` replaces the spec with `{"type": raw.get("type", "Opaque"), "dataKeys": list(raw.get("data", {}).keys())}`. The base64-encoded values in `raw["data"]` are discarded. This applies to both `watch_stream` and `resync_all`.
 - **E2E test 1 (AI namespace count) limit=50** — Uses limit 50 (not 20) to ensure cluster-scoped resources rank in top results despite `kind=null` lowering their semantic similarity score.
-- **E2E test execution order** — Tests run in definition order: AI tests (1 namespace-count, 2 secrets-query) first, then CDC tests (3 create-ns, 4 update-deploy, 5 delete, 6 secret), then Reset (7) last. AI tests run first to avoid Ollama queue contention: CDC tests trigger `nomic-embed-text` embed calls via n8n that serialise with the AI tests' own embed+chat calls (OLLAMA_NUM_PARALLEL=1). Reset always runs last — it wipes Qdrant, which would invalidate any test run after it.
+- **E2E test execution order** — Tests run in definition order: AI tests (1 namespace-count, 2 secrets-query) first, then CDC tests (3 create-ns, 4 update-deploy, 5 delete, 6 secret), then Reset (7 webhook, 8 manual) last. AI tests run first to avoid Ollama queue contention: CDC tests trigger `nomic-embed-text` embed calls via n8n that serialise with the AI tests' own embed+chat calls (OLLAMA_NUM_PARALLEL=1). Reset tests always run last — they wipe Qdrant, which would invalidate any test run after them.
+- **n8n REST API manual execution** — `POST /rest/workflows/{id}/run` with body `{ workflowData: <workflow JSON from GET /rest/workflows/{id}>, startNodes: [], triggerToStartFrom: { name: "Manual Trigger" } }` executes via the Manual Trigger node and returns `{ data: { executionId } }`. Poll `GET /rest/executions/{executionId}` for `status=success` and verify `mode=manual`. Requires session cookie from `POST /rest/login` (or HTTP Basic auth header).
 - **Dual NodePort services for Qdrant and k8s-watcher** — Each has both a ClusterIP service (for in-cluster access by name, e.g., `http://qdrant:6333`) and a separate NodePort service (`qdrant-nodeport`, `k8s-watcher-nodeport`) for host access. The ClusterIP services are what n8n workflow nodes reference; the NodePort services expose health/debug endpoints to the host.

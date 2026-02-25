@@ -8,13 +8,14 @@
  *   4. Update deployment → old vector replaced (dedup by resource_uid)
  *   5. Delete resource  → point removed from Qdrant
  *   6. CDC Secret      → Secret event in Kafka + Qdrant (safe metadata only, no values)
- *   7. Reset           → Qdrant cleared + CDC resync repopulates
+ *   7. Reset (webhook) → Qdrant cleared + CDC resync repopulates
+ *   8. Reset (manual)  → same pipeline via Manual Trigger node through n8n REST API
  *
  * Execution order rationale:
  *   AI tests (1–2) run FIRST — before CDC tests (3–6) trigger Ollama embed calls
  *   that would queue ahead of the AI tests' own embed+chat calls via
  *   OLLAMA_NUM_PARALLEL=1.  Both AI tests query initial Qdrant data seeded by
- *   setup.sh and are independent of the CDC tests.  Reset (7) always runs last.
+ *   setup.sh and are independent of the CDC tests.  Reset (7, 8) always runs last.
  *
  * The tests exercise the full pipeline:
  *   k8s API → k8s-watcher → Kafka → (CDC processing) → Qdrant → Ollama LLM
@@ -171,7 +172,8 @@ async function qdrantGet(request: APIRequestContext, uid: string) {
 // ── Test 1: AI query → markdown table ────────────────────────────────────────
 // Runs FIRST — before CDC tests trigger Ollama embed calls that would queue
 // ahead of this test's embed+chat calls (OLLAMA_NUM_PARALLEL=1).
-test('AI: namespace count query → structured markdown table response', async ({ request }) => {
+test('AI: namespace count query → structured markdown table response', { timeout: 600_000 }, async ({ request }) => {
+  // 10 min timeout: qwen3:8b cold-load on CPU can take 5+ min after model eviction.
   // Confirm Qdrant is populated from the initial resync before querying.
   await waitForQdrantStable(request);
 
@@ -474,4 +476,88 @@ test('Reset: POST /webhook/k8s-reset clears Qdrant and CDC resync repopulates', 
 
   expect(pointsCount, 'Qdrant must be repopulated with at least 10 points after resync')
     .toBeGreaterThanOrEqual(10);
+});
+
+// ── Test 8: Manual Trigger ────────────────────────────────────────────────────
+// Runs LAST after Test 7 — Qdrant is already repopulated by Test 7's resync.
+//
+// Approach: n8n REST API (no browser required)
+//   1. POST /rest/login  → establish session cookie
+//   2. GET  /rest/workflows/k8sRSTflow00001  → fetch full workflow JSON
+//   3. POST /rest/workflows/k8sRSTflow00001/run
+//        { workflowData, startNodes: [], triggerToStartFrom: { name: "Manual Trigger" } }
+//      → executes the workflow via the Manual Trigger node (mode=manual)
+//   4. Poll GET /rest/executions/{id} until status=success + mode=manual
+//   5. Wait for Qdrant to be repopulated (≥ 10 points from CDC resync)
+//
+// Why not `n8n execute` CLI? It always tries to bind port 5679 (Task Broker), which
+// conflicts with the already-running n8n server.  No env override suppresses it.
+// Why not browser click? n8n overlays execution results on the canvas; the overlay
+// captures all pointer events (even force:true / dispatchEvent) and prevents the
+// underlying Vue handler from firing.
+test('Reset: Manual Trigger (REST API) executes workflow → mode=manual, Qdrant cleared and repopulated', async ({ request }) => {
+  const basicAuth = 'Basic ' + Buffer.from('admin:admin').toString('base64');
+
+  // 1. Login — establishes session cookie tracked by Playwright's request fixture
+  const loginResp = await request.post(`${N8N}/rest/login`, {
+    headers: { 'Authorization': basicAuth, 'Content-Type': 'application/json' },
+    data: { emailOrLdapLoginId: 'assaduzzaman.ict@gmail.com', password: 'admin@123Normal' },
+  });
+  expect(loginResp.ok(), `n8n login failed: ${loginResp.status()}`).toBeTruthy();
+
+  // 2. Fetch the full workflow JSON (n8n requires workflowData in the run request)
+  const wfResp = await request.get(`${N8N}/rest/workflows/k8sRSTflow00001`, {
+    headers: { 'Authorization': basicAuth },
+  });
+  expect(wfResp.ok(), `workflow fetch failed: ${wfResp.status()}`).toBeTruthy();
+  const wfData = (await wfResp.json()).data;
+
+  // 3. Execute via Manual Trigger node
+  //    triggerToStartFrom.name must match the node's `name` field exactly.
+  const runResp = await request.post(`${N8N}/rest/workflows/k8sRSTflow00001/run`, {
+    headers: { 'Authorization': basicAuth, 'Content-Type': 'application/json' },
+    data: {
+      workflowData: wfData,
+      startNodes: [],
+      triggerToStartFrom: { name: 'Manual Trigger' },
+    },
+  });
+  expect(runResp.ok(), `workflow run request failed: ${runResp.status()}`).toBeTruthy();
+  const runBody = await runResp.json();
+  const executionId: string = runBody.data?.executionId;
+  expect(executionId, 'run response must include executionId').toBeTruthy();
+
+  // 4. Poll execution status until success (or timeout 60 s)
+  let execMode = '';
+  let execStatus = '';
+  const execDeadline = Date.now() + 60_000;
+  while (Date.now() < execDeadline) {
+    await sleep(1_000);
+    const execResp = await request.get(`${N8N}/rest/executions/${executionId}`, {
+      headers: { 'Authorization': basicAuth },
+    });
+    if (!execResp.ok()) continue;
+    const execData = (await execResp.json()).data;
+    execMode   = execData?.mode   ?? '';
+    execStatus = execData?.status ?? '';
+    if (execStatus === 'success' || execStatus === 'error') break;
+  }
+  expect(execMode,   'execution must have mode=manual (Manual Trigger node was used)').toBe('manual');
+  expect(execStatus, 'execution must have status=success').toBe('success');
+
+  // 5. Wait for k8s-watcher CDC resync to repopulate Qdrant.
+  //    The workflow calls DELETE+PUT on the Qdrant collection (synchronous) then
+  //    POST /resync (async, returns 202).  By the time the execution status is
+  //    'success', Qdrant is already empty and resync is in flight.
+  let pointsCount = 0;
+  const deadline = Date.now() + 90_000; // up to 90 s
+  while (Date.now() < deadline) {
+    await sleep(3_000);
+    const colResp = await request.get(`${QDRANT}/collections/k8s`);
+    if (colResp.ok()) {
+      pointsCount = (await colResp.json()).result.points_count ?? 0;
+      if (pointsCount >= 10) break;
+    }
+  }
+  expect(pointsCount, 'Qdrant must be repopulated with ≥ 10 points after manual trigger reset').toBeGreaterThanOrEqual(10);
 });
