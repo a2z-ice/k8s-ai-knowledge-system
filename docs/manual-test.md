@@ -1,8 +1,8 @@
 # Manual Test Guide — Kubernetes AI Knowledge System
 
-**Version:** 1.7
-**Date:** 2026-02-24
-**Environment:** macOS · Docker Desktop · kind v0.24+ · n8n (latest) · All services in-cluster (k8s-ai namespace)
+**Version:** 1.8
+**Date:** 2026-02-25
+**Environment:** macOS · Docker Desktop · kind v0.24+ · n8n (latest) · All services in-cluster (k8s-ai namespace) · PostgreSQL · pgAdmin
 
 Complete step-by-step verification of the Kubernetes AI Knowledge System — from infrastructure health through to live CDC event observation and AI query validation in the n8n browser UI. Every command and browser step has been verified against the live running environment.
 
@@ -24,18 +24,18 @@ This single command:
 1. Verifies prerequisites (Docker, kind, kubectl, ollama, npm, python3)
 2. Pulls any missing Ollama models (`nomic-embed-text`, `qwen3:8b`)
 3. Creates the kind cluster with `infra/kind-config.yaml` (NodePort mappings + data mounts)
-4. Applies all Kubernetes manifests (namespace, PVs, Kafka, Qdrant, k8s-watcher, n8n)
+4. Applies all Kubernetes manifests (namespace, PVs, Kafka, Qdrant, k8s-watcher, n8n, postgres, pgAdmin)
 5. Builds and loads the `k8s-watcher:latest` image into kind
 6. Creates the Qdrant collection (`k8s`, 768-dim Cosine)
-7. Sets up the n8n database: creates Kafka credential + imports and activates all 3 workflows
+7. Sets up the n8n database: creates Kafka credential + imports and activates all 4 workflows
 8. Triggers Qdrant resync and waits for ≥ 10 points
-9. Runs `npm test` — all 5 E2E tests must pass
+9. Runs `npm test` — all 12 E2E tests must pass
 
 Expected output at the end:
 ```
 ━━━ Running E2E test suite ━━━
 ...
-  5 passed (18.0s)
+  12 passed (1.8m)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Setup complete!
@@ -45,11 +45,14 @@ Expected output at the end:
   AI chat            : http://localhost:30000/webhook/k8s-ai-chat/chat
   Qdrant             : http://localhost:30001
   k8s-watcher health : http://localhost:30002/healthz
+  pgAdmin            : http://localhost:30003  (admin@example.com / admin)
+  Postgres (direct)  : psql -h localhost -p 30004 -U n8n -d n8n_memory
 
   Workflow IDs (static — embedded in JSON):
-    CDC   = k8sCDCflow00001
-    AI    = k8sAIflow000001
-    Reset = k8sRSTflow00001
+    CDC    = k8sCDCflow00001
+    AI     = k8sAIflow000001
+    Reset  = k8sRSTflow00001
+    Memory = k8sMEMclear001
 ```
 
 ### 0.2 Re-setup without recreating the cluster (fastest path after editing workflows)
@@ -104,8 +107,9 @@ Reuses the existing `k8s-ai` kind cluster. Re-imports workflows, recreates the K
 12. [Section J — Automated E2E Test Suite](#section-j--automated-e2e-test-suite)
 13. [Section K — Persistence Verification](#section-k--persistence-verification)
 14. [Section L — Reset REST Endpoint](#section-l--reset-rest-endpoint)
-15. [Pass Criteria Summary](#pass-criteria-summary)
-16. [Troubleshooting](#troubleshooting)
+15. [Section M — Memory & Chat History](#section-m--memory--chat-history)
+16. [Pass Criteria Summary](#pass-criteria-summary)
+17. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -120,6 +124,8 @@ Reuses the existing `k8s-ai` kind cluster. Re-imports workflows, recreates the K
 | k8s-watcher Health | http://localhost:30002/healthz | None |
 | Qdrant REST API | http://localhost:30001 | None |
 | Ollama (host machine) | http://localhost:11434 | None |
+| pgAdmin | http://localhost:30003 | Email: admin@example.com / Password: admin |
+| Postgres (direct) | `psql -h localhost -p 30004 -U n8n -d n8n_memory` | User: n8n / Password: n8n_memory |
 
 ---
 
@@ -154,7 +160,7 @@ Verify the cluster has the correct port mappings:
 docker inspect k8s-ai-control-plane --format '{{json .HostConfig.PortBindings}}' | python3 -m json.tool
 ```
 
-Expected: ports 30000, 30001, 30002 and 6443 all listed.
+Expected: ports 30000, 30001, 30002, 30003, 30004 and 6443 all listed.
 
 ### 2.3 Ollama Models Available on Host
 
@@ -171,13 +177,13 @@ Both of the following must be present:
 
 If either is missing: `ollama pull nomic-embed-text && ollama pull qwen3:8b`
 
-### 2.4 All 4 Pods Running in k8s-ai Namespace
+### 2.4 All 6 Pods Running in k8s-ai Namespace
 
 ```bash
 kubectl --context kind-k8s-ai -n k8s-ai get pods
 ```
 
-Expected — all 4 pods in `Running` state (1/1 Ready):
+Expected — all 6 pods in `Running` state (1/1 Ready):
 
 ```
 NAME                           READY   STATUS    RESTARTS
@@ -185,6 +191,8 @@ k8s-watcher-<hash>             1/1     Running   0
 kafka-0                        1/1     Running   0
 n8n-<hash>                     1/1     Running   0
 qdrant-<hash>                  1/1     Running   0
+postgres-<hash>                1/1     Running   0
+pgadmin-<hash>                 1/1     Running   0
 ```
 
 If any pod is missing or not Ready, apply the manifests:
@@ -195,6 +203,8 @@ kubectl --context kind-k8s-ai apply -f infra/k8s/kafka/
 kubectl --context kind-k8s-ai apply -f infra/k8s/qdrant/
 kubectl --context kind-k8s-ai apply -f infra/k8s/k8s-watcher/
 kubectl --context kind-k8s-ai apply -f infra/k8s/n8n/
+kubectl --context kind-k8s-ai apply -f infra/k8s/postgres/
+kubectl --context kind-k8s-ai apply -f infra/k8s/pgadmin/
 # Wait 30 seconds for Kafka readiness probe, then check again
 ```
 
@@ -297,6 +307,30 @@ curl -s http://localhost:30002/healthz
 ```
 
 Expected: `{"status":"ok"}`
+
+### A6. PostgreSQL
+
+```bash
+POSTGRES_POD=$(kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=postgres -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-k8s-ai -n k8s-ai exec ${POSTGRES_POD} -- pg_isready -U n8n -d n8n_memory
+```
+
+Expected: `localhost:5432 - accepting connections`
+
+```bash
+kubectl --context kind-k8s-ai -n k8s-ai exec ${POSTGRES_POD} -- \
+  psql -U n8n -d n8n_memory -c "SELECT current_database(), version();"
+```
+
+Expected: `n8n_memory | PostgreSQL 15.x ...`
+
+### A7. pgAdmin
+
+```bash
+curl -sf http://localhost:30003/misc/ping
+```
+
+Expected: `PING`
 
 ---
 
@@ -412,6 +446,7 @@ Both workflows must show a green **Active** badge on the right side of their row
 | `CDC_K8s_Flow` | Active (green) |
 | `AI_K8s_Flow` | Active (green) |
 | `Reset_K8s_Flow` | Active (green) |
+| `Memory_Clear_Flow` | Active (green) |
 
 If any workflow shows as inactive, refer to the [Troubleshooting](#troubleshooting) section.
 
@@ -567,16 +602,16 @@ http://localhost:30000/workflow/k8sAIflow000001
 
 ![AI workflow canvas — 6-node query pipeline](screenshots/08-ai-workflow-canvas.png)
 
-**Expected nodes on the canvas (left to right):**
+**Expected nodes on the canvas:**
 
 | # | Node | Role |
 |---|------|------|
 | 1 | Chat Trigger | Receives user query via public webhook `/webhook/k8s-ai-chat/chat` |
-| 2 | Generate Embedding | Embeds query via Ollama `nomic-embed-text` (768-dim) |
-| 3 | Qdrant Search | Vector similarity search, cosine ≥ 0.3, top 30 results |
-| 4 | Build Prompt | Formats retrieved docs + spec snippets into LLM messages |
-| 5 | LLM Chat | Calls Ollama `qwen3:8b`, temperature 0.1 |
-| 6 | Format Response | Extracts `message.content` and returns as `output` |
+| 2 | AI Agent | toolsAgent — orchestrates tool calls and generates grounded response |
+| 3 | Ollama Chat Model | `qwen3:8b`, temperature 0.1 — language model sub-node (`ai_languageModel`) |
+| 4 | Qdrant Vector Store | retrieve-as-tool, topK=30 — knowledge base sub-node (`ai_tool`) |
+| 5 | Embeddings Ollama | `nomic-embed-text:latest` — embedding sub-node (`ai_embedding`) |
+| 6 | Postgres Chat Memory | Session `k8s-ai-global`, contextWindow=5, `n8n_chat_histories` table (`ai_memory`) |
 
 ### G1. Verify AI Workflow Active Status
 
@@ -668,6 +703,35 @@ http://localhost:30000/workflow/k8sAIflow000001/executions
 
 Each chat query generates one execution. Click the latest row to inspect the data flow — every node must show a green status indicator.
 
+### H7. Test Memory Persistence
+
+Send two consecutive queries — the second refers to the first:
+
+**First query:**
+```
+How many pods are running in kube-system?
+```
+
+Wait for the response (10–30 s), then send the **second query immediately after**:
+
+```
+Which namespace did I just ask about?
+```
+
+**Expected:** The second response references `kube-system` — confirming the AI Agent is using the Postgres Chat Memory node to recall the prior exchange.
+
+> The session key `k8s-ai-global` is shared across all queries. The last 5 message pairs are stored in the `n8n_chat_histories` table and injected into each new request as conversation history.
+
+Verify the memory rows directly:
+```bash
+POSTGRES_POD=$(kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=postgres -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-k8s-ai -n k8s-ai exec ${POSTGRES_POD} -- \
+  psql -U n8n -d n8n_memory -c \
+  "SELECT session_id, message->>'type' AS type, left(message->>'data'::text, 60) AS preview FROM n8n_chat_histories ORDER BY id DESC LIMIT 6;"
+```
+
+Expected: rows of type `human` and `ai` for session `k8s-ai-global`.
+
 ---
 
 ## Section I — AI Pipeline Verification (Terminal)
@@ -741,18 +805,25 @@ npm test
 Expected output:
 
 ```
-Running 5 tests using 1 worker
+Running 12 tests using 1 worker
 
   ✓  1 [api] › CDC: create namespace → Kafka event published + Qdrant insertion (2.9s)
   ✓  2 [api] › CDC: update deployment → old vector replaced (dedup by resource_uid) (1.9s)
   ✓  3 [api] › CDC: delete resource → point removed from Qdrant vector store (24ms)
   ✓  4 [api] › AI: namespace count query → structured markdown table response (3.3s)
-  ✓  5 [api] › Reset: POST /webhook/k8s-reset clears Qdrant and CDC resync repopulates (3.4s)
+  ✓  5 [api] › CDC: Secret → Kafka offset advances + Qdrant stores safe spec (2.1s)
+  ✓  6 [api] › AI: secrets query → kube-system secrets in results, no raw values (4.2s)
+  ✓  7 [api] › AI: deployment query → Qdrant vector search returns deployments (3.1s)
+  ✓  8 [api] › AI Agent: chat webhook returns 200 with output field (8.4s)
+  ✓  9 [api] › AI Agent: deployment query via live webhook (18.2s)
+  ✓ 10 [api] › AI Agent: hallucination guard — no Redis in cluster (14.7s)
+  ✓ 11 [api] › AI Agent: namespace listing via live webhook (12.6s)
+  ✓ 12 [api] › Reset: POST /webhook/k8s-reset clears Qdrant and CDC resync repopulates (3.4s)
 
-  5 passed (12.0s)
+  12 passed (1.8m)
 ```
 
-All 5 tests must pass. Total runtime is typically under 30 seconds.
+All 12 tests must pass. Total runtime is typically under 2 minutes.
 
 ### J3. Run a Single Test
 
@@ -932,11 +1003,75 @@ Expected: JSON response with a markdown table listing your Kubernetes deployment
 
 ---
 
+## Section M — Memory & Chat History
+
+### M1. Inspect Chat History in pgAdmin
+
+Open **http://localhost:30003** and sign in with `admin@example.com` / `admin`.
+
+The "k8s-ai Postgres" server is pre-configured. Navigate:
+
+**Databases → n8n_memory → Schemas → public → Tables → n8n_chat_histories → View/Edit Data → All Rows**
+
+Each row contains:
+| Column | Contents |
+|--------|----------|
+| `id` | Auto-increment row ID |
+| `session_id` | `k8s-ai-global` (the fixed session key) |
+| `message` | JSONB — `{"type": "human"/"ai", "data": {...}}` |
+
+### M2. Inspect Chat History from Terminal
+
+```bash
+POSTGRES_POD=$(kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=postgres -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-k8s-ai -n k8s-ai exec ${POSTGRES_POD} -- \
+  psql -U n8n -d n8n_memory -c \
+  "SELECT id, session_id, message->>'type' AS type, left(message->>'data'::text, 80) AS preview FROM n8n_chat_histories ORDER BY id;"
+```
+
+### M3. Manual Memory Clear (Memory_Clear_Flow)
+
+The `Memory_Clear_Flow` workflow runs a `DELETE FROM n8n_chat_histories` automatically every hour via the Schedule Trigger. To clear immediately:
+
+**Option 1 — n8n UI:**
+1. Navigate to **http://localhost:30000**
+2. Click **Memory_Clear_Flow**
+3. Click **Execute workflow** (play button)
+4. The Clear Memory postgres node runs and empties the table
+
+**Option 2 — direct psql:**
+```bash
+POSTGRES_POD=$(kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=postgres -o jsonpath='{.items[0].metadata.name}')
+kubectl --context kind-k8s-ai -n k8s-ai exec ${POSTGRES_POD} -- \
+  psql -U n8n -d n8n_memory -c "DELETE FROM n8n_chat_histories;"
+```
+
+**Verify empty:**
+```bash
+kubectl --context kind-k8s-ai -n k8s-ai exec ${POSTGRES_POD} -- \
+  psql -U n8n -d n8n_memory -c "SELECT COUNT(*) FROM n8n_chat_histories;"
+```
+
+Expected: `0`
+
+### M4. Verify Memory_Clear_Flow Schedule
+
+The schedule trigger fires every hour (rule: `field: hours, hoursInterval: 1`). To confirm the workflow is active:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" \
+  http://localhost:30000/workflow/k8sMEMclear001/executions 2>/dev/null || echo "(needs browser auth)"
+```
+
+Check n8n execution history for Memory_Clear_Flow in the UI after the first scheduled run.
+
+---
+
 ## Pass Criteria Summary
 
 | # | Check | Command / Action | Expected |
 |---|-------|-----------------|----------|
-| 1 | All 4 pods Running | `kubectl -n k8s-ai get pods` | All `Running` 1/1 |
+| 1 | All 6 pods Running | `kubectl -n k8s-ai get pods` | All `Running` 1/1 |
 | 2 | Qdrant green, ≥ 25 points | `curl localhost:30001/collections/k8s` | `status: green` |
 | 3 | Ollama models present | `ollama list` | `nomic-embed-text`, `qwen3:8b` |
 | 4 | CDC workflow active | webhook HTTP 200 | `curl localhost:30000/webhook/k8s-ai-chat/chat` → 200 |
@@ -953,8 +1088,13 @@ Expected: JSON response with a markdown table listing your Kubernetes deployment
 | 15 | Reset clears Qdrant | Section L3–L4 | 0 points immediately after reset |
 | 16 | CDC resync repopulates | Section L5 | ≥ 25 points after ~60 s |
 | 17 | Reset workflow active in n8n | Section L6 | Green badge + success execution |
-| 18 | Automated suite passes | `npm test` | `5 passed` |
+| 18 | Automated suite passes | `npm test` | `12 passed` |
 | 19 | Data survives pod restart | Section K | Point count and offset unchanged |
+| 20 | PostgreSQL accepting connections | Section A6 | `accepting connections` |
+| 21 | pgAdmin responds | Section A7 | `PING` |
+| 22 | Memory_Clear_Flow active | Section D | Active (green) |
+| 23 | Memory persists across queries | Section H7 | Second query recalls first |
+| 24 | Memory clear empties table | Section M3 | `COUNT(*) = 0` |
 
 ---
 
@@ -1086,3 +1226,30 @@ print('Models:', models)
 If Ollama is not running: `ollama serve &`
 
 > Note: Pods reach Ollama via `host.docker.internal:11434` mapped to `192.168.1.154` through `hostAliases` in the n8n and k8s-watcher Deployments.
+
+### AI Agent ignores previous questions (no memory)
+
+The `Postgres Chat Memory` node needs the postgres credential and a running postgres pod:
+
+```bash
+# Check postgres pod
+kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=postgres
+
+# If the n8n_chat_histories table doesn't exist yet:
+# It is auto-created on the first successful AI flow execution.
+# Run one chat query to trigger table creation, then try the memory test again.
+
+# Check postgres credential exists in n8n
+SQLITE3=$(command -v sqlite3 || echo "/Volumes/Other/opt/miniconda3/envs/ml/bin/sqlite3")
+${SQLITE3} data/n8n/database.sqlite \
+  "SELECT id, name, type FROM credentials_entity WHERE type='postgres';"
+# Expected: postgres-local | Postgres Local | postgres
+```
+
+### pgAdmin in CrashLoopBackOff
+
+```bash
+kubectl --context kind-k8s-ai -n k8s-ai logs -l app=pgadmin --tail=20
+```
+
+If the error mentions email validation failure: verify `PGADMIN_DEFAULT_EMAIL` is `admin@example.com` (not a `.local` domain) and `PGADMIN_CONFIG_CHECK_EMAIL_DELIVERABILITY: "False"` is set in `infra/k8s/pgadmin/pgadmin-deployment.yaml`.

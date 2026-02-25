@@ -2,8 +2,8 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testMatch: ['**/playwright_k8s_ai_e2e.spec.ts'],
-  timeout: 120_000,       // 2 min per test — LLM + k8s ops can be slow
-  globalTimeout: 900_000, // 15 min total suite (accounts for qwen3:8b cold-load between AI tests)
+  timeout: 300_000,        // 5 min per test — AI Agent tool calls via qwen3:8b + think:false take ~2-4 min
+  globalTimeout: 1_800_000, // 30 min total suite (10 tests incl. 3 AI Agent webhook calls via n8n)
   reporter: [['list'], ['html', { open: 'never', outputFolder: '../../playwright-report' }]],
   // API-only project — no browser installation required
   projects: [

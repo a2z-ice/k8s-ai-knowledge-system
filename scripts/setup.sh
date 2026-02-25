@@ -117,13 +117,27 @@ else
   ok "node_modules already present"
 fi
 
-# ── step 2: check for port conflicts ────────────────────────────────────────
+# ── step 2: delete old cluster (if recreating) ───────────────────────────────
+# Done BEFORE the port-conflict check so the cluster's NodePorts are freed
+# and do not appear as conflicts when we probe with lsof below.
+if [[ "${KEEP_CLUSTER}" == "false" ]]; then
+  if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
+    step "Deleting existing cluster"
+    warn "Deleting existing cluster '${CLUSTER_NAME}' …"
+    kind delete cluster --name "${CLUSTER_NAME}"
+    ok "Cluster deleted"
+    # Brief pause for OS to release the port bindings
+    sleep 3
+  fi
+fi
+
+# ── step 2b: check for port conflicts ────────────────────────────────────────
 # Skip port check when reusing existing cluster — the ports are already held by kind
 if [[ "${KEEP_CLUSTER}" == "false" ]]; then
-  step "Checking port availability (30000–30002)"
+  step "Checking port availability (30000–30004)"
 
   CONFLICTING=()
-  for port in 30000 30001 30002; do
+  for port in 30000 30001 30002 30003 30004; do
     if lsof -iTCP:"${port}" -sTCP:LISTEN -t &>/dev/null 2>&1; then
       CONFLICTING+=("localhost:${port}")
     fi
@@ -131,14 +145,14 @@ if [[ "${KEEP_CLUSTER}" == "false" ]]; then
 
   if [[ ${#CONFLICTING[@]} -gt 0 ]]; then
     warn "Ports in use: ${CONFLICTING[*]}"
-    warn "Another process is listening on one of the required ports (30000/30001/30002)."
+    warn "Another process is listening on one of the required ports (30000–30004)."
     warn "Identify and stop it, then re-run this script."
     warn "  Example: lsof -iTCP:30000 -sTCP:LISTEN"
     die  "Port conflict — cannot bind kind NodePorts"
   fi
-  ok "Ports 30000/30001/30002 are free"
+  ok "Ports 30000–30004 are free"
 else
-  step "Checking port availability (30000–30002)"
+  step "Checking port availability (30000–30004)"
   ok "Skipped — reusing existing cluster (--keep-cluster)"
 fi
 
@@ -148,7 +162,7 @@ fi
 # (with n8n stopped) in step 10 before re-importing.
 step "Data directories"
 
-for dir in data/n8n data/qdrant data/kafka; do
+for dir in data/n8n data/qdrant data/kafka data/postgres; do
   mkdir -p "${PROJECT_ROOT}/${dir}"
   ok "  ${dir}"
 done
@@ -163,12 +177,8 @@ if [[ "${KEEP_CLUSTER}" == "true" ]]; then
     die "--keep-cluster specified but cluster '${CLUSTER_NAME}' does not exist"
   fi
 else
-  if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
-    warn "Deleting existing cluster '${CLUSTER_NAME}' …"
-    kind delete cluster --name "${CLUSTER_NAME}"
-    ok "Cluster deleted"
-  fi
-
+  # Cluster was already deleted in step 2 (before port-conflict check).
+  # Just create it here.
   log "Creating cluster '${CLUSTER_NAME}' with infra/kind-config.yaml …"
   kind create cluster --config "${PROJECT_ROOT}/infra/kind-config.yaml"
   ok "Cluster created"
@@ -184,11 +194,11 @@ ok "Node is Ready"
 log "Verifying NodePort mappings …"
 PORTBINDINGS=$(docker inspect "${CLUSTER_NAME}-control-plane" \
   --format '{{json .HostConfig.PortBindings}}' 2>/dev/null)
-for port in 30000 30001 30002; do
+for port in 30000 30001 30002 30003 30004; do
   echo "${PORTBINDINGS}" | grep -q "\"${port}/tcp\"" \
     || die "Port ${port} not mapped in kind node — recreate cluster without --keep-cluster"
 done
-ok "NodePort mappings confirmed: 30000/30001/30002"
+ok "NodePort mappings confirmed: 30000/30001/30002/30003/30004"
 
 # ── step 5: kubernetes manifests ────────────────────────────────────────────
 step "Applying Kubernetes manifests"
@@ -207,6 +217,18 @@ log "Qdrant …"
 kubectl --context "${CONTEXT}" apply -f "${PROJECT_ROOT}/infra/k8s/qdrant/"
 wait_for_rollout deployment qdrant 60
 ok "Qdrant is Running"
+
+log "PostgreSQL …"
+kubectl --context "${CONTEXT}" apply -f "${PROJECT_ROOT}/infra/k8s/postgres/"
+wait_for_rollout deployment postgres 120
+log "Waiting for postgres pod readiness probe …"
+kubectl --context "${CONTEXT}" -n "${NAMESPACE}" wait \
+  --for=condition=ready pod -l app=postgres --timeout=120s
+ok "PostgreSQL is Ready"
+
+log "pgAdmin …"
+kubectl --context "${CONTEXT}" apply -f "${PROJECT_ROOT}/infra/k8s/pgadmin/"
+ok "pgAdmin manifests applied (starting in background)"
 
 # ── step 6: build + load k8s-watcher ────────────────────────────────────────
 step "Building k8s-watcher image"
@@ -286,8 +308,8 @@ ok "n8n stopped"
 if [[ -n "${SQLITE3_BIN}" && -f "${N8N_DB}" ]]; then
   log "Removing existing workflow rows (credentials and encryption key preserved) …"
   "${SQLITE3_BIN}" "${N8N_DB}" \
-    "DELETE FROM workflow_entity WHERE name IN ('CDC_K8s_Flow','AI_K8s_Flow','Reset_K8s_Flow')
-        OR id IN ('k8sCDCflow00001','k8sAIflow000001','k8sRSTflow00001');" \
+    "DELETE FROM workflow_entity WHERE name IN ('CDC_K8s_Flow','AI_K8s_Flow','Reset_K8s_Flow','Memory_Clear_Flow')
+        OR id IN ('k8sCDCflow00001','k8sAIflow000001','k8sRSTflow00001','k8sMEMclear001');" \
     2>/dev/null || true
   # Clean up orphaned shared_workflow rows
   "${SQLITE3_BIN}" "${N8N_DB}" \
@@ -383,6 +405,94 @@ conn.close()
 PYEOF
 ok "Kafka credential ready"
 
+# 10c-2. Ensure the Ollama + Qdrant credentials exist in the n8n DB.
+log "Ensuring Ollama + Qdrant credentials exist in n8n DB …"
+python3 - "${N8N_DB}" << 'PYEOF'
+import hashlib, os, json, base64, sqlite3, sys
+from datetime import datetime, timezone
+
+try:
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.primitives import padding as _pad
+    from cryptography.hazmat.backends import default_backend
+    HAS_CRYPTO = True
+except ImportError:
+    HAS_CRYPTO = False
+
+DB_PATH = sys.argv[1]
+if not os.path.exists(DB_PATH):
+    print("DB not found — credentials will be added after n8n first start", file=sys.stderr)
+    sys.exit(0)
+
+if not HAS_CRYPTO:
+    print("WARNING: 'cryptography' library not available — credentials not created", file=sys.stderr)
+    sys.exit(0)
+
+SALTED = bytes.fromhex('53616c7465645f5f')  # "Salted__"
+
+def get_key():
+    cfg = os.path.join(os.path.dirname(DB_PATH), 'config')
+    if os.path.exists(cfg):
+        with open(cfg) as f:
+            return json.load(f).get('encryptionKey', '')
+    return ''
+
+def n8n_encrypt(data, enc_key):
+    salt = os.urandom(8)
+    pwd  = enc_key.encode('latin-1') + salt
+    h1 = hashlib.md5(pwd).digest()
+    h2 = hashlib.md5(h1 + pwd).digest()
+    iv = hashlib.md5(h2 + pwd).digest()
+    k  = h1 + h2
+    pt = json.dumps(data).encode('utf-8')
+    padder = _pad.PKCS7(128).padder()
+    padded = padder.update(pt) + padder.finalize()
+    cipher = Cipher(algorithms.AES(k), modes.CBC(iv), backend=default_backend())
+    enc = cipher.encryptor()
+    ct = enc.update(padded) + enc.finalize()
+    return base64.b64encode(SALTED + salt + ct).decode('utf-8')
+
+enc_key = get_key()
+if not enc_key:
+    print("WARNING: encryption key not found in data/n8n/config — credentials not created", file=sys.stderr)
+    sys.exit(0)
+
+conn = sqlite3.connect(DB_PATH)
+cur  = conn.cursor()
+
+cur.execute("SELECT id FROM project LIMIT 1")
+row = cur.fetchone()
+project_id = row[0] if row else None
+now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.000')
+
+CREDENTIALS = [
+    ('ollama-local', 'Ollama Local', 'ollamaApi',  {'baseUrl': 'http://host.docker.internal:11434'}),
+    ('qdrant-local', 'Qdrant Local', 'qdrantApi',  {'qdrantUrl': 'http://qdrant:6333', 'apiKey': ''}),
+    ('postgres-local', 'Postgres Local', 'postgres', {'host': 'postgres', 'database': 'n8n_memory', 'user': 'n8n', 'password': 'n8n_memory', 'port': 5432, 'ssl': 'disable'}),
+]
+
+for cred_id, cred_name, cred_type, cred_data in CREDENTIALS:
+    cur.execute("SELECT id FROM credentials_entity WHERE id=? OR name=?", (cred_id, cred_name))
+    if cur.fetchone():
+        print(f"{cred_name} credential already exists")
+        continue
+    encrypted = n8n_encrypt(cred_data, enc_key)
+    cur.execute(
+        "INSERT INTO credentials_entity (id, name, data, type, createdAt, updatedAt) VALUES (?,?,?,?,?,?)",
+        (cred_id, cred_name, encrypted, cred_type, now, now),
+    )
+    if project_id:
+        cur.execute(
+            "INSERT INTO shared_credentials (credentialsId, projectId, role, createdAt, updatedAt) VALUES (?,?,?,?,?)",
+            (cred_id, project_id, 'credential:owner', now, now),
+        )
+    conn.commit()
+    print(f"{cred_name} credential created")
+
+conn.close()
+PYEOF
+ok "Ollama + Qdrant credentials ready"
+
 # 10d. Start n8n (now with correct DB state)
 log "Starting n8n …"
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" scale deployment/n8n --replicas=1
@@ -393,7 +503,7 @@ log "n8n pod: ${N8N_POD}"
 
 # 10e. Copy workflow files and import (n8n must be running for CLI)
 log "Copying workflow JSON files into pod …"
-for wf in n8n_cdc_k8s_flow.json n8n_ai_k8s_flow.json n8n_reset_k8s_flow.json; do
+for wf in n8n_cdc_k8s_flow.json n8n_ai_k8s_flow.json n8n_reset_k8s_flow.json n8n_memory_clear_flow.json; do
   kubectl --context "${CONTEXT}" -n "${NAMESPACE}" \
     cp "${PROJECT_ROOT}/workflows/${wf}" "${N8N_POD}:/tmp/${wf}"
 done
@@ -403,6 +513,7 @@ log "Importing workflows …"
 n8n_exec n8n import:workflow --input=/tmp/n8n_cdc_k8s_flow.json
 n8n_exec n8n import:workflow --input=/tmp/n8n_ai_k8s_flow.json
 n8n_exec n8n import:workflow --input=/tmp/n8n_reset_k8s_flow.json
+n8n_exec n8n import:workflow --input=/tmp/n8n_memory_clear_flow.json
 ok "Workflows imported"
 
 # 10f. Workflow IDs — these are the static IDs embedded in the workflow JSON files.
@@ -410,6 +521,7 @@ ok "Workflows imported"
 CDC_ID="k8sCDCflow00001"
 AI_ID="k8sAIflow000001"
 RESET_ID="k8sRSTflow00001"
+MEMORY_ID="k8sMEMclear001"
 
 # Verify the IDs are actually present in the DB after import
 log "Verifying imported workflow IDs …"
@@ -431,15 +543,17 @@ except Exception as e:
 PYEOF
 rm -f "${EXPORT_TMP}"
 
-ok "CDC workflow ID:   ${CDC_ID}"
-ok "AI workflow ID:    ${AI_ID}"
-ok "Reset workflow ID: ${RESET_ID}"
+ok "CDC workflow ID:    ${CDC_ID}"
+ok "AI workflow ID:     ${AI_ID}"
+ok "Reset workflow ID:  ${RESET_ID}"
+ok "Memory workflow ID: ${MEMORY_ID}"
 
-# 10g. Publish (activate) all three workflows
-log "Publishing (activating) all three workflows …"
+# 10g. Publish (activate) all four workflows
+log "Publishing (activating) all four workflows …"
 n8n_exec n8n publish:workflow --id="${CDC_ID}"
 n8n_exec n8n publish:workflow --id="${AI_ID}"
 n8n_exec n8n publish:workflow --id="${RESET_ID}"
+n8n_exec n8n publish:workflow --id="${MEMORY_ID}"
 ok "All workflows published"
 
 # 10h. Rollout restart so the published state takes effect
@@ -545,6 +659,7 @@ check_endpoint() {
 check_endpoint "n8n healthz"         "http://localhost:30000/healthz"
 check_endpoint "Qdrant healthz"      "http://localhost:30001/healthz"
 check_endpoint "k8s-watcher healthz" "http://localhost:30002/healthz"
+check_endpoint "pgAdmin"             "http://localhost:30003/misc/ping"
 
 CHAT_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
   "http://localhost:30000/webhook/k8s-ai-chat/chat" \
@@ -595,11 +710,14 @@ echo -e "  n8n (domain)       : ${CYAN}http://n8n.genai.prod:30000${NC}  ← req
 echo -e "  AI chat            : ${CYAN}http://localhost:30000/webhook/k8s-ai-chat/chat${NC}"
 echo -e "  Qdrant             : ${CYAN}http://localhost:30001${NC}"
 echo -e "  k8s-watcher health : ${CYAN}http://localhost:30002/healthz${NC}"
+echo -e "  pgAdmin            : ${CYAN}http://localhost:30003${NC}  (admin@example.com / admin)"
+echo -e "  Postgres (direct)  : ${CYAN}psql -h localhost -p 30004 -U n8n -d n8n_memory${NC}"
 echo
 echo -e "  Workflow IDs (save these):"
-echo -e "    CDC   = ${BOLD}${CDC_ID}${NC}"
-echo -e "    AI    = ${BOLD}${AI_ID}${NC}"
-echo -e "    Reset = ${BOLD}${RESET_ID}${NC}"
+echo -e "    CDC    = ${BOLD}${CDC_ID}${NC}"
+echo -e "    AI     = ${BOLD}${AI_ID}${NC}"
+echo -e "    Reset  = ${BOLD}${RESET_ID}${NC}"
+echo -e "    Memory = ${BOLD}${MEMORY_ID}${NC}"
 echo
 if ! grep -q "n8n.genai.prod" /etc/hosts 2>/dev/null; then
   echo -e "  ${YELLOW}⚠ /etc/hosts: add the following line for domain access:${NC}"

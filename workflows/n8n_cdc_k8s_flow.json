@@ -28,7 +28,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// The Kafka trigger delivers the raw message string in .message\nconst raw = $input.first().json;\nlet data;\ntry {\n  data = typeof raw.message === 'string' ? JSON.parse(raw.message) : raw;\n} catch (_) {\n  data = raw;\n}\n\n// Use embed_text from watcher if present; build one otherwise\nlet embed_text = data.embed_text;\nif (!embed_text) {\n  const ns = data.namespace || 'cluster-scoped';\n  const scope = data.namespace ? `in namespace ${data.namespace}` : 'cluster-scoped';\n  const labels = Object.entries(data.labels || {}).slice(0,5).map(([k,v])=>`${k}=${v}`).join(', ') || 'none';\n  embed_text = `Kubernetes ${data.kind} named ${data.name} ${scope}. Labels: ${labels}. Spec: ${(data.raw_spec_json||'{}').substring(0,600)}`;\n}\n\nreturn [{ json: { ...data, embed_text } }];"
+        "jsCode": "// The Kafka trigger delivers the raw message string in .message\nconst raw = $input.first().json;\nlet data;\ntry {\n  data = typeof raw.message === 'string' ? JSON.parse(raw.message) : raw;\n} catch (_) {\n  data = raw;\n}\n\n// Use embed_text from watcher if present; build one otherwise\nlet embed_text = data.embed_text;\nif (!embed_text) {\n  const scope = data.namespace ? `in namespace ${data.namespace}` : 'cluster-scoped';\n  const labels = Object.entries(data.labels || {}).slice(0,5).map(([k,v])=>`${k}=${v}`).join(', ') || 'none';\n  embed_text = `Kubernetes ${data.kind} named ${data.name} ${scope}. Labels: ${labels}. Spec: ${(data.raw_spec_json||'{}').substring(0,600)}`;\n}\n\nreturn [{ json: { ...data, embed_text } }];"
       },
       "id": "parse-message",
       "name": "Parse Message",
@@ -45,7 +45,7 @@
         "url": "http://qdrant:6333/collections/k8s/points/delete",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ points: [$('Parse Message').first().json.resource_uid] }) }}",
+        "jsonBody": "={{ JSON.stringify({ filter: { must: [{ key: 'metadata.resource_uid', match: { value: $('Parse Message').first().json.resource_uid } }] } }) }}",
         "options": {}
       },
       "id": "delete-vector",
@@ -90,17 +90,12 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "http://host.docker.internal:11434/api/embed",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: 'nomic-embed-text', input: $('Parse Message').first().json.embed_text }) }}",
-        "options": {}
+        "jsCode": "const src = $('Parse Message').first().json;\nreturn [{\n  json: {\n    pageContent: src.embed_text,\n    metadata: {\n      resource_uid:           src.resource_uid,\n      kind:                   src.kind,\n      api_version:            src.api_version,\n      namespace:              src.namespace,\n      name:                   src.name,\n      labels:                 JSON.stringify(src.labels || {}),\n      annotations:            JSON.stringify(src.annotations || {}),\n      raw_spec_json:          src.raw_spec_json,\n      last_updated_timestamp: src.last_updated_timestamp\n    }\n  }\n}];"
       },
-      "id": "generate-embedding",
-      "name": "Generate Embedding",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
+      "id": "format-document",
+      "name": "Format Document",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
         1080,
         420
@@ -108,34 +103,82 @@
     },
     {
       "parameters": {
-        "jsCode": "const embedding = $input.first().json.embeddings[0];\nconst src = $('Parse Message').first().json;\n\nreturn [{\n  json: {\n    points: [{\n      id: src.resource_uid,\n      vector: embedding,\n      payload: {\n        resource_uid: src.resource_uid,\n        kind:          src.kind,\n        api_version:   src.api_version,\n        namespace:     src.namespace,\n        name:          src.name,\n        labels:        src.labels,\n        annotations:   src.annotations,\n        raw_spec_json: src.raw_spec_json,\n        last_updated_timestamp: src.last_updated_timestamp\n      }\n    }]\n  }\n}];"
+        "dataType": "json",
+        "jsonMode": "expressionData",
+        "jsonData": "={{ $json.pageContent }}",
+        "textSplittingMode": "simple",
+        "options": {
+          "metadata": {
+            "metadataValues": [
+              { "name": "resource_uid", "value": "={{ $json.metadata.resource_uid }}" },
+              { "name": "kind", "value": "={{ $json.metadata.kind }}" },
+              { "name": "api_version", "value": "={{ $json.metadata.api_version }}" },
+              { "name": "namespace", "value": "={{ $json.metadata.namespace }}" },
+              { "name": "name", "value": "={{ $json.metadata.name }}" },
+              { "name": "labels", "value": "={{ $json.metadata.labels }}" },
+              { "name": "annotations", "value": "={{ $json.metadata.annotations }}" },
+              { "name": "raw_spec_json", "value": "={{ $json.metadata.raw_spec_json }}" },
+              { "name": "last_updated_timestamp", "value": "={{ $json.metadata.last_updated_timestamp }}" }
+            ]
+          }
+        }
       },
-      "id": "build-point",
-      "name": "Build Qdrant Point",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "id": "default-data-loader",
+      "name": "Default Data Loader",
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1.1,
       "position": [
-        1300,
-        420
+        1080,
+        620
       ]
     },
     {
       "parameters": {
-        "method": "PUT",
-        "url": "http://qdrant:6333/collections/k8s/points",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify($json) }}",
+        "mode": "insert",
+        "qdrantCollection": {
+          "__rl": true,
+          "value": "k8s",
+          "mode": "id"
+        },
+        "options": {
+          "contentPayloadKey": "pageContent",
+          "metadataPayloadKey": "metadata"
+        }
+      },
+      "id": "insert-to-qdrant",
+      "name": "Insert to Qdrant",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+      "typeVersion": 1,
+      "position": [
+        1300,
+        420
+      ],
+      "credentials": {
+        "qdrantApi": {
+          "id": "qdrant-local",
+          "name": "Qdrant Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "nomic-embed-text:latest",
         "options": {}
       },
-      "id": "insert-vector",
-      "name": "Insert Vector",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
+      "id": "embeddings-ollama-cdc",
+      "name": "Embeddings Ollama",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOllama",
+      "typeVersion": 1,
       "position": [
-        1520,
-        420
-      ]
+        1300,
+        620
+      ],
+      "credentials": {
+        "ollamaApi": {
+          "id": "ollama-local",
+          "name": "Ollama Local"
+        }
+      }
     }
   ],
   "connections": {
@@ -177,30 +220,41 @@
         [],
         [
           {
-            "node": "Generate Embedding",
+            "node": "Format Document",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Generate Embedding": {
+    "Format Document": {
       "main": [
         [
           {
-            "node": "Build Qdrant Point",
+            "node": "Insert to Qdrant",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Build Qdrant Point": {
-      "main": [
+    "Default Data Loader": {
+      "ai_document": [
         [
           {
-            "node": "Insert Vector",
-            "type": "main",
+            "node": "Insert to Qdrant",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Ollama": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Insert to Qdrant",
+            "type": "ai_embedding",
             "index": 0
           }
         ]

@@ -8,9 +8,9 @@
         "options": {}
       },
       "id": "chat-trigger",
-      "name": "Chat Trigger",
+      "name": "When chat message received",
       "type": "@n8n/n8n-nodes-langchain.chatTrigger",
-      "typeVersion": 1,
+      "typeVersion": 1.4,
       "position": [
         180,
         300
@@ -19,136 +19,170 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "http://host.docker.internal:11434/api/embed",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: 'nomic-embed-text', input: $json.chatInput }) }}",
+        "agent": "toolsAgent",
+        "options": {
+          "systemMessage": "You are a Kubernetes cluster monitoring assistant. Every question you receive is about the live Kubernetes cluster — even if the word 'kubernetes' is not mentioned.\n\nSTEP 1: ALWAYS call the kubernetes_knowledge_base tool first. Never skip it.\nSTEP 2: Answer ONLY from the retrieved results. Never hallucinate.\nSTEP 3: Respond with a markdown table as your primary output. No reasoning, no explanations, no step-by-step thinking — only the table and at most one short sentence.\n\nOutput rules:\n- PRIMARY format: markdown table (| Column | Column |)\n- If the tool returns no results: output a one-row table: | Status | No indexed Kubernetes resources found |\n- Never include reasoning, chain-of-thought, or verbose explanations\n- Never expose resource_uid values\n- For Secret resources: table may show name and type only — never data values",
+          "maxIterations": 2
+        }
+      },
+      "id": "ai-agent",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "qwen3:8b",
+        "options": {
+          "temperature": 0.1,
+          "think": false
+        }
+      },
+      "id": "ollama-chat-model",
+      "name": "Ollama Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        240,
+        520
+      ],
+      "credentials": {
+        "ollamaApi": {
+          "id": "ollama-local",
+          "name": "Ollama Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "qdrantCollection": {
+          "__rl": true,
+          "value": "k8s",
+          "mode": "id"
+        },
+        "toolName": "kubernetes_knowledge_base",
+        "toolDescription": "Search the Kubernetes cluster knowledge base. Use this for any question about pods, deployments, services, namespaces, secrets, configmaps, or other cluster resources.",
+        "topK": 10,
+        "includeDocumentMetadata": true,
+        "options": {
+          "contentPayloadKey": "pageContent",
+          "metadataPayloadKey": "metadata"
+        }
+      },
+      "id": "qdrant-vector-store",
+      "name": "Qdrant Vector Store",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+      "typeVersion": 1,
+      "position": [
+        560,
+        520
+      ],
+      "credentials": {
+        "qdrantApi": {
+          "id": "qdrant-local",
+          "name": "Qdrant Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "nomic-embed-text:latest",
         "options": {}
       },
-      "id": "generate-embedding",
-      "name": "Generate Embedding",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
+      "id": "embeddings-ollama",
+      "name": "Embeddings Ollama",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOllama",
+      "typeVersion": 1,
       "position": [
-        400,
-        300
-      ]
+        560,
+        720
+      ],
+      "credentials": {
+        "ollamaApi": {
+          "id": "ollama-local",
+          "name": "Ollama Local"
+        }
+      }
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "http://qdrant:6333/collections/k8s/points/search",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ vector: $json.embeddings[0], limit: 30, with_payload: true, score_threshold: 0.3 }) }}",
-        "options": {}
+        "sessionIdType": "customKey",
+        "sessionKey": "k8s-ai-global",
+        "tableName": "n8n_chat_histories",
+        "contextWindowLength": 5
       },
-      "id": "qdrant-search",
-      "name": "Qdrant Search",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
+      "id": "postgres-memory",
+      "name": "Postgres Chat Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
       "position": [
-        620,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "const results = $json.result || [];\nconst query = $('Chat Trigger').first().json.chatInput;\n\nconst SYSTEM_PROMPT = `You are an expert Kubernetes AI assistant integrated with a RAG system.\n\nRules:\n- ONLY answer based on the retrieved context provided. Never hallucinate cluster state.\n- If context is empty or irrelevant, respond exactly: \"No indexed Kubernetes resources found in vector database.\"\n- Use markdown tables for structured/aggregated data.\n- Do not expose internal resource_uid values.\n- Be concise and technical.`;\n\nlet userMessage;\nif (results.length === 0) {\n  userMessage = `No resources were retrieved from the vector database.\\n\\nUser question: ${query}`;\n} else {\n  const ctx = results\n    .map((r, i) => {\n      const p = r.payload;\n      const spec = p.raw_spec_json ? p.raw_spec_json.substring(0, 300) : '{}';\n      const labels = JSON.stringify(p.labels || {});\n      return `[${i + 1}] kind=${p.kind}  name=${p.name}  namespace=${p.namespace || '(cluster-scoped)'}  labels=${labels}  score=${r.score.toFixed(3)}  spec=${spec}`;\n    })\n    .join('\\n');\n  userMessage = `Retrieved ${results.length} Kubernetes resources:\\n\\n${ctx}\\n\\nUser question: ${query}`;\n}\n\nreturn [{ json: { system_prompt: SYSTEM_PROMPT, user_message: userMessage } }];"
-      },
-      "id": "build-prompt",
-      "name": "Build Prompt",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        840,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "http://host.docker.internal:11434/api/chat",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: 'qwen3:8b', messages: [ { role: 'system', content: $json.system_prompt }, { role: 'user', content: $json.user_message } ], stream: false, options: { temperature: 0.1 }, think: false }) }}",
-        "options": {}
-      },
-      "id": "llm-chat",
-      "name": "LLM Chat",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [
-        1060,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "const r = $input.first().json;\nconst text = r?.message?.content || r?.response || 'No response from LLM.';\nreturn [{ json: { output: text } }];"
-      },
-      "id": "format-response",
-      "name": "Format Response",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1280,
-        300
-      ]
+        420,
+        720
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-local",
+          "name": "Postgres Local"
+        }
+      }
     }
   ],
   "connections": {
-    "Chat Trigger": {
+    "When chat message received": {
       "main": [
         [
           {
-            "node": "Generate Embedding",
+            "node": "AI Agent",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Generate Embedding": {
-      "main": [
+    "Ollama Chat Model": {
+      "ai_languageModel": [
         [
           {
-            "node": "Qdrant Search",
-            "type": "main",
+            "node": "AI Agent",
+            "type": "ai_languageModel",
             "index": 0
           }
         ]
       ]
     },
-    "Qdrant Search": {
-      "main": [
+    "Qdrant Vector Store": {
+      "ai_tool": [
         [
           {
-            "node": "Build Prompt",
-            "type": "main",
+            "node": "AI Agent",
+            "type": "ai_tool",
             "index": 0
           }
         ]
       ]
     },
-    "Build Prompt": {
-      "main": [
+    "Embeddings Ollama": {
+      "ai_embedding": [
         [
           {
-            "node": "LLM Chat",
-            "type": "main",
+            "node": "Qdrant Vector Store",
+            "type": "ai_embedding",
             "index": 0
           }
         ]
       ]
     },
-    "LLM Chat": {
-      "main": [
+    "Postgres Chat Memory": {
+      "ai_memory": [
         [
           {
-            "node": "Format Response",
-            "type": "main",
+            "node": "AI Agent",
+            "type": "ai_memory",
             "index": 0
           }
         ]

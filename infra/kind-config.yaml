@@ -13,6 +13,12 @@ nodes:
       - containerPort: 30002
         hostPort: 30002
         protocol: TCP
+      - containerPort: 30003
+        hostPort: 30003
+        protocol: TCP
+      - containerPort: 30004
+        hostPort: 30004
+        protocol: TCP
     extraMounts:
       - hostPath: /Volumes/Other/rand/kind_vector_n8n/data
         containerPath: /data

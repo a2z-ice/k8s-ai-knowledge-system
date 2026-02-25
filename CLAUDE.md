@@ -12,8 +12,8 @@ Project-specific slash commands are in `.claude/commands/`. Use them to quickly 
 | `/status` | Full health check — k8s pods, Qdrant, Kafka, k8s-watcher, Ollama, kind, n8n workflows, webhooks |
 | `/start-services` | Apply k8s manifests and verify all components are healthy |
 | `/reset-db` | Wipe Qdrant vector DB and trigger CDC resync via `/webhook/k8s-reset` |
-| `/reimport-workflows` | Reimport + reactivate all 3 n8n workflows from local JSON files |
-| `/test` | Run all 7 E2E tests (`npm test`) with prerequisite checks and failure diagnosis |
+| `/reimport-workflows` | Reimport + reactivate all 4 n8n workflows from local JSON files |
+| `/test` | Run all 12 E2E tests (`npm test`) with prerequisite checks and failure diagnosis |
 | `/screenshots` | Capture all UI screenshots (`npm run screenshots`) and list output |
 
 ---
@@ -95,6 +95,21 @@ kind_vector_n8n/
 
 ---
 
+## Prerequisites
+
+| Tool | Notes |
+|------|-------|
+| Docker Desktop 4.x+ | Must be running before any `kind` or `kubectl` commands |
+| kind 0.24+ | Cluster name is `k8s-ai`, context is `kind-k8s-ai` |
+| kubectl | Any version |
+| Ollama | Runs on host only — never in a pod |
+| Node.js 18+ | Required for `npm test` and `npm run screenshots` |
+| python3 3.8+ | Required only for local (non-kind) dev; not needed in-cluster |
+
+> **Machine-specific path:** `infra/kind-config.yaml` has a hardcoded `hostPath: /Volumes/Other/rand/kind_vector_n8n/data`. If the repo is cloned elsewhere, update this path before running `setup.sh`.
+
+---
+
 ## Commands
 
 ### Full from-scratch setup (recommended)
@@ -131,11 +146,20 @@ npx playwright install chromium
 
 ### Run E2E tests
 ```bash
-npm test                           # all 7 tests
+npm test                           # all 10 tests
 npm run test:single "create namespace"   # single test by name
 ```
 
-**E2E test design:** Tests 1–4 and 6–7 simulate CDC processing inline (embed + upsert directly to Qdrant) — they do NOT depend on n8n workflows being active. Test 5 (`Reset`) does require the n8n reset webhook. If tests 1–4 pass but test 5 fails with 404, run `/reimport-workflows`. Tests 6–7 cover Secret watching: Test 6 verifies Kafka offset advances and Qdrant stores only safe Secret metadata (no values), Test 7 verifies the AI query pipeline surfaces Secret names without exposing raw values.
+**E2E test design:** Tests 1–4 and 6–7 simulate CDC processing inline (embed + upsert directly to Qdrant) — they do NOT depend on n8n workflows being active. Test 5 (`Reset`) does require the n8n reset webhook. Tests 8–10 exercise the full native LangChain AI Agent pipeline via the live n8n webhook (`/webhook/k8s-ai-chat/chat`): Chat Trigger → AI Agent → Qdrant Vector Store (tool) + Ollama Chat Model + Embeddings Ollama. If tests 1–4 pass but test 5 fails with 404, run `/reimport-workflows`. Tests 8–10 require AI_K8s_Flow to be active (webhook returns 200). All qdrantUpsert calls now include `pageContent` in the payload (required by the native Qdrant retriever).
+
+**Test ordering:** Test 5 (Reset) is declared **last** in the spec file (after tests 6–10) despite being numbered 5 — this is intentional. Reset wipes Qdrant, so it must execute after all other tests. Playwright runs tests in declaration order within the file.
+
+### Quick AI chat test (no browser needed)
+```bash
+curl -X POST http://localhost:30000/webhook/k8s-ai-chat/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"chatInput": "Show me all deployments and their replica counts"}'
+```
 
 ### Capture UI screenshots
 ```bash
@@ -218,9 +242,12 @@ Collection `k8s`, 768-dim Cosine. Point ID = `resource_uid` (UUID from k8s). Pay
 | CDC workflow ID | `k8sCDCflow00001` (static — embedded in JSON) |
 | AI workflow ID | `k8sAIflow000001` (static — embedded in JSON) |
 | Reset workflow ID | `k8sRSTflow00001` (static — embedded in JSON) |
+| Memory Clear workflow ID | `k8sMEMclear001` (static — embedded in JSON) |
 | AI public chat URL | http://n8n.genai.prod:30000/webhook/k8s-ai-chat/chat |
 | Reset endpoint | POST http://localhost:30000/webhook/k8s-reset |
 | k8s-watcher health | http://localhost:30002/healthz (host) / http://k8s-watcher:8080/healthz (in-cluster) |
+| pgAdmin URL | http://localhost:30003 (admin@example.com / admin) |
+| Postgres direct | psql -h localhost -p 30004 -U n8n -d n8n_memory |
 | Qdrant URL | http://localhost:30001 (host) / http://qdrant:6333 (in-cluster) |
 | Kafka topic | `k8s-resources` |
 | Kafka consumer group | `n8n-cdc-consumer` |
@@ -237,6 +264,8 @@ Collection `k8s`, 768-dim Cosine. Point ID = `resource_uid` (UUID from k8s). Pay
 | 30000 | n8n | http://localhost:30000 |
 | 30001 | Qdrant | http://localhost:30001 |
 | 30002 | k8s-watcher | http://localhost:30002/healthz |
+| 30003 | pgAdmin | http://localhost:30003 |
+| 30004 | postgres direct | psql -h localhost -p 30004 -U n8n -d n8n_memory |
 
 ---
 
