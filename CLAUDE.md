@@ -47,7 +47,8 @@ docs/plans/
   1. Kubernetes AI Knowledge System.md
   2. Kubernetes In-Cluster Migration.md
   3. Add Secret Resource Watching.md
-  4. <next new plan — create this file before starting significant work>
+  4. Add Manual Trigger to Reset Workflow.md
+  5. <next new plan — create this file before starting significant work>
 ```
 
 When starting a new significant piece of work, create the next numbered plan file before implementing.
@@ -166,13 +167,16 @@ curl -X POST http://localhost:31000/webhook/k8s-ai-chat/chat \
 
 ### Capture UI screenshots
 ```bash
-N8N_EMAIL=you@example.com N8N_PASS=yourpassword npm run screenshots
+N8N_EMAIL=assaduzzaman.ict@gmail.com N8N_PASS=admin@123Normal npm run screenshots
 # saves to docs/screenshots/
 ```
 
 ### Reimport and reactivate workflows (after editing workflow JSON)
 
-**Always use `setup.sh --keep-cluster --no-test`** — it handles deduplication, ID discovery, and activation automatically. Do not `kubectl cp` + `n8n import:workflow` manually without first deleting the old rows from sqlite3, as `n8n import:workflow` always creates a new row with a fresh ID rather than overwriting by name.
+- **Fast path (cluster already running):** run `/reimport-workflows` — handles deduplication and activation for all 3 workflows in ~30s.
+- **Full path (after cluster restart or when unsure):** `./scripts/setup.sh --keep-cluster --no-test` — also rebuilds k8s-watcher image, re-applies manifests, and verifies everything.
+
+Do not `kubectl cp` + `n8n import:workflow` manually without first deleting the old rows from sqlite3, as `n8n import:workflow` always creates a new row with a fresh ID rather than overwriting by name.
 
 ### Build and load k8s-watcher image into kind
 ```bash

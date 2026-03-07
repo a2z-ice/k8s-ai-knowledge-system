@@ -6,7 +6,7 @@ A self-hosted Kubernetes AI Knowledge System that continuously indexes a live `k
 
 ```
 kind cluster (K8s API)
-  └─ k8s-watcher (Python pod)   watches 9 resource types
+  └─ k8s-watcher (Python pod)   watches 10 resource types
        └─ Kafka (k8s-resources)  CDC event stream
             └─ n8n CDC Flow      embed → delete-by-uid → insert into Qdrant
 
