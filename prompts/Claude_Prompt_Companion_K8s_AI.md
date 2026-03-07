@@ -48,7 +48,7 @@ Present as table:
 
 -   Use Ollama embedding model for query vectorization.
 -   Use cosine similarity search in Qdrant.
--   Minimum similarity threshold: 0.75 (recommended).
+-   Minimum similarity threshold: 0.3 (operational setting — nomic-embed-text scores 0.38–0.70 for k8s metadata).
 
 ------------------------------------------------------------------------
 

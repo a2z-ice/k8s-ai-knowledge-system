@@ -5,7 +5,11 @@
     {
       "parameters": {
         "public": true,
-        "options": {}
+        "initialMessages": "Hi there! 👋\nMy name is Assad. How can I assist you today?",
+        "options": {
+          "title": "K8s AI Assistant",
+          "subtitle": "Ask me anything about your Kubernetes cluster"
+        }
       },
       "id": "chat-trigger",
       "name": "When chat message received",
@@ -21,7 +25,7 @@
       "parameters": {
         "agent": "toolsAgent",
         "options": {
-          "systemMessage": "You are a Kubernetes cluster monitoring assistant. Every question you receive is about the live Kubernetes cluster — even if the word 'kubernetes' is not mentioned.\n\nSTEP 1: ALWAYS call the kubernetes_knowledge_base tool first. Never skip it.\nSTEP 2: Answer ONLY from the retrieved results. Never hallucinate.\nSTEP 3: Respond with a markdown table as your primary output. No reasoning, no explanations, no step-by-step thinking — only the table and at most one short sentence.\n\nOutput rules:\n- PRIMARY format: markdown table (| Column | Column |)\n- If the tool returns no results: output a one-row table: | Status | No indexed Kubernetes resources found |\n- Never include reasoning, chain-of-thought, or verbose explanations\n- Never expose resource_uid values\n- For Secret resources: table may show name and type only — never data values",
+          "systemMessage": "You are a Kubernetes cluster monitoring assistant.\nEvery question is about the LIVE cluster. Always call the tool first.\n\nRules:\n1. ALWAYS use kubernetes_knowledge_base tool before answering.\n2. Answer ONLY from tool results. Never invent data.\n3. Output a concise markdown table with columns: Kind | Name | Namespace | Details.\n4. Include ALL matching resources from the tool results — do not omit any.\n5. After the table, add at most one summary sentence.\n6. Never output raw JSON, reasoning, or chain-of-thought.\n7. Never expose resource_uid or secret data values.\n8. If no results: | Status | No indexed Kubernetes resources found |",
           "maxIterations": 2
         }
       },
@@ -36,10 +40,11 @@
     },
     {
       "parameters": {
-        "model": "qwen3:8b",
+        "model": "qwen3:8b-k8s",
         "options": {
-          "temperature": 0.1,
-          "think": false
+          "temperature": 0,
+          "numPredict": 1024,
+          "numCtx": 32768
         }
       },
       "id": "ollama-chat-model",
@@ -66,8 +71,8 @@
           "mode": "id"
         },
         "toolName": "kubernetes_knowledge_base",
-        "toolDescription": "Search the Kubernetes cluster knowledge base. Use this for any question about pods, deployments, services, namespaces, secrets, configmaps, or other cluster resources.",
-        "topK": 10,
+        "toolDescription": "Search the Kubernetes cluster knowledge base by semantic similarity. Use this for ANY question about pods, deployments, services, namespaces, secrets, configmaps, replicasets, statefulsets, daemonsets, PVCs, or other Kubernetes resources. Returns matching resources with kind, name, namespace, and spec summary.",
+        "topK": 30,
         "includeDocumentMetadata": true,
         "options": {
           "contentPayloadKey": "pageContent",
