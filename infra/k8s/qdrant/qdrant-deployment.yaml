@@ -5,6 +5,8 @@ metadata:
   namespace: k8s-ai
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: qdrant
@@ -28,6 +30,13 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 5
             failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 6333
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
       volumes:
         - name: qdrant-data
           persistentVolumeClaim:

@@ -23,49 +23,10 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "http://qdrant:6333/collections/k8s/points/scroll",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "{\"limit\":200,\"with_payload\":{\"include\":[\"metadata\"]}}",
-        "options": {
-          "response": {
-            "response": {
-              "responseFormat": "json"
-            }
-          }
-        }
-      },
-      "id": "scroll-qdrant",
-      "name": "Scroll All Resources",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [
-        400,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "const chatInput = $('When chat message received').first().json.chatInput;\nconst qdrantResponse = $('Scroll All Resources').first().json;\nconst points = qdrantResponse.result?.points || [];\n\n// Build structured inventory grouped by kind\nconst byKind = {};\nfor (const p of points) {\n  const m = p.payload?.metadata || {};\n  const kind = m.kind || '?';\n  if (!byKind[kind]) byKind[kind] = [];\n  byKind[kind].push({ name: m.name, namespace: m.namespace || 'cluster-scoped', spec: m.spec_summary || '-' });\n}\n\n// Build compact inventory text\nlet inventory = '';\nfor (const [kind, items] of Object.entries(byKind).sort()) {\n  // Group by namespace within each kind\n  const byNs = {};\n  for (const item of items) {\n    if (!byNs[item.namespace]) byNs[item.namespace] = [];\n    byNs[item.namespace].push(item.name);\n  }\n  inventory += `\\n${kind} (${items.length} total):`;\n  for (const [ns, names] of Object.entries(byNs).sort()) {\n    inventory += `\\n  ${ns}: ${names.join(', ')}`;\n  }\n}\n\n// Enrich chatInput with inventory context\nconst enrichedInput = `[CLUSTER INVENTORY - ${points.length} resources total]\n${inventory}\n\n[USER QUESTION]\n${chatInput}`;\n\nreturn [{ json: { chatInput: enrichedInput } }];"
-      },
-      "id": "build-inventory",
-      "name": "Build Inventory",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        620,
-        300
-      ]
-    },
-    {
-      "parameters": {
         "agent": "toolsAgent",
-        "promptType": "define",
-        "text": "={{ $json.chatInput }}",
         "options": {
-          "systemMessage": "You are a Kubernetes cluster monitoring assistant.\n\n/no_think\n\nThe user's message starts with [CLUSTER INVENTORY] containing ALL resources in the cluster, followed by [USER QUESTION].\n\nRules:\n1. Answer from the CLUSTER INVENTORY data provided in the message. This is the authoritative source.\n2. For specific resource details, optionally use the kubernetes_search tool.\n3. NEVER invent or hallucinate data. Only use inventory data.\n4. Output concise markdown tables only.\n5. For counting queries: | Namespace | Count |\n6. For listing: | Kind | Name | Namespace | Details |\n7. One summary sentence max.\n8. Never expose resource_uid or secret data values.",
-          "maxIterations": 2
+          "systemMessage": "You are a Kubernetes cluster monitoring assistant for the kind cluster \"k8s-ai\".\n\n/no_think\n\nYou have TWO tools. You MUST call a tool before EVERY answer — never rely on chat history or memory alone.\n\n## Tool Selection\n\n**kubernetes_inventory** — ALWAYS use this when the question involves:\n- Counting (\"how many pods/configmaps/deployments?\")\n- Listing or showing ALL resources of a type (\"list all configmaps\", \"show me the configmaps\", \"what configmaps exist\", \"give me the names\")\n- Aggregation (\"resources per namespace\", \"pods in each namespace\")\n- Follow-up questions about resources previously counted or listed (\"show me those 2 configmaps\", \"what are their names\")\n- Cluster overview (\"what is running?\")\n\n**kubernetes_search** — Use this ONLY when the question is about:\n- ONE specific named resource (\"show me the coredns deployment spec\")\n- Searching by label (\"find services with app=kafka\")\n- Deep details about a single resource's containers, ports, or volumes\n\n## Critical Rules\n1. ALWAYS call a tool before answering — even for follow-up questions. Never answer from chat history alone.\n2. When in doubt between tools, use kubernetes_inventory — it returns ALL resources and is always complete.\n3. If the user previously counted N resources and now asks to list them, call kubernetes_inventory again — do NOT answer from memory.\n4. If one tool's results seem incomplete, call the other tool.\n5. NEVER invent or hallucinate resources, names, or counts. Only report what the tool returns.\n6. Output concise markdown tables for structured data.\n7. One summary sentence maximum after the table.\n8. Never expose resource_uid or secret data values.",
+          "maxIterations": 5
         }
       },
       "id": "ai-agent",
@@ -73,7 +34,7 @@
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 1.7,
       "position": [
-        840,
+        480,
         300
       ]
     },
@@ -91,7 +52,7 @@
       "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
       "typeVersion": 1,
       "position": [
-        660,
+        300,
         520
       ],
       "credentials": {
@@ -110,7 +71,7 @@
           "mode": "id"
         },
         "toolName": "kubernetes_search",
-        "toolDescription": "Semantic search of the Kubernetes cluster knowledge base. Use for detailed lookups about specific resources. Returns the most relevant resources with metadata.",
+        "toolDescription": "Search the Kubernetes cluster knowledge base by semantic similarity. Use this for specific resource lookups like 'show me the coredns deployment' or 'what services exist in kube-system'. Input should describe what you are looking for. Returns the most relevant resources with metadata including kind, name, namespace, labels, and spec details.",
         "topK": 20,
         "includeDocumentMetadata": true,
         "options": {
@@ -123,7 +84,7 @@
       "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
       "typeVersion": 1,
       "position": [
-        860,
+        500,
         520
       ],
       "credentials": {
@@ -143,7 +104,7 @@
       "type": "@n8n/n8n-nodes-langchain.embeddingsOllama",
       "typeVersion": 1,
       "position": [
-        860,
+        500,
         720
       ],
       "credentials": {
@@ -152,6 +113,22 @@
           "name": "Ollama Local"
         }
       }
+    },
+    {
+      "parameters": {
+        "name": "kubernetes_inventory",
+        "description": "Get a complete inventory of ALL Kubernetes resources in the cluster, grouped by kind and namespace with exact counts. Use this tool for counting queries (how many pods), listing all resources of a type, aggregation queries (resources per namespace), or cluster overview questions. Returns every resource organized by kind and namespace.",
+        "language": "javaScript",
+        "jsCode": "// Scroll ALL resources from Qdrant with pagination\nlet allPoints = [];\nlet offset = null;\ndo {\n  const body = { limit: 100, with_payload: { include: ['metadata'] } };\n  if (offset) body.offset = offset;\n  const response = await this.helpers.httpRequest({\n    method: 'POST',\n    url: 'http://qdrant:6333/collections/k8s/points/scroll',\n    body,\n    json: true\n  });\n  const page = response.result?.points || [];\n  allPoints.push(...page);\n  offset = response.result?.next_page_offset || null;\n} while (offset);\n\nif (allPoints.length === 0) return 'No Kubernetes resources found in the vector database.';\n\n// Group by kind, then by namespace\nconst byKind = {};\nfor (const p of allPoints) {\n  const m = p.payload?.metadata || {};\n  const kind = m.kind || '?';\n  if (!byKind[kind]) byKind[kind] = [];\n  byKind[kind].push({\n    name: m.name || '?',\n    namespace: m.namespace || 'cluster-scoped',\n    labels: m.labels || '{}',\n    spec: m.spec_summary || '-'\n  });\n}\n\n// Build structured inventory with details per resource\nconst lines = [`CLUSTER INVENTORY — ${allPoints.length} resources total`, ''];\nfor (const kind of Object.keys(byKind).sort()) {\n  const items = byKind[kind];\n  const byNs = {};\n  for (const item of items) {\n    if (!byNs[item.namespace]) byNs[item.namespace] = [];\n    byNs[item.namespace].push(item);\n  }\n  lines.push(`${kind} (${items.length} total):`);\n  for (const ns of Object.keys(byNs).sort()) {\n    const nsItems = byNs[ns];\n    lines.push(`  ${ns} (${nsItems.length}):`);\n    for (const item of nsItems) {\n      lines.push(`    - ${item.name} [${item.spec}]`);\n    }\n  }\n}\n\nreturn lines.join('\\n');"
+      },
+      "id": "tool-code-inventory",
+      "name": "Kubernetes Inventory Tool",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1,
+      "position": [
+        700,
+        520
+      ]
     },
     {
       "parameters": {
@@ -165,7 +142,7 @@
       "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
       "typeVersion": 1.3,
       "position": [
-        740,
+        380,
         720
       ],
       "credentials": {
@@ -178,28 +155,6 @@
   ],
   "connections": {
     "When chat message received": {
-      "main": [
-        [
-          {
-            "node": "Scroll All Resources",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Scroll All Resources": {
-      "main": [
-        [
-          {
-            "node": "Build Inventory",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Build Inventory": {
       "main": [
         [
           {
@@ -238,6 +193,17 @@
           {
             "node": "Qdrant Vector Store",
             "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kubernetes Inventory Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
             "index": 0
           }
         ]

@@ -46,6 +46,12 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 5
             failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "n8n", "-d", "n8n_memory"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
       volumes:
         - name: postgres-data
           persistentVolumeClaim:

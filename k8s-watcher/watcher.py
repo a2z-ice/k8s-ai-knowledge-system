@@ -83,6 +83,15 @@ def obj_to_payload(event_type: str, obj, kind_hint: str = "") -> dict:
         if not k.startswith("kubectl.kubernetes.io/last-applied")
     }
 
+    # ConfigMap: capture data field (ConfigMaps have no spec)
+    if kind == "ConfigMap":
+        cm_data = raw.get("data") or {}
+        # Truncate large values to keep payload manageable
+        spec = {
+            k: (v[:200] + "..." if len(v) > 200 else v)
+            for k, v in cm_data.items()
+        }
+
     # For Secrets: expose type and key names only — never the base64-encoded values
     if kind == "Secret":
         spec = {

@@ -53,8 +53,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [
-        640,
-        300
+        860,
+        180
       ]
     },
     {
@@ -84,13 +84,13 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
-        860,
+        640,
         300
       ]
     },
     {
       "parameters": {
-        "jsCode": "const src = $('Parse Message').first().json;\n\n// Build a compact spec summary instead of sending the entire raw_spec_json\n// This reduces per-result payload from ~5KB to ~200 bytes\nfunction buildSpecSummary(kind, rawSpec) {\n  try {\n    const spec = typeof rawSpec === 'string' ? JSON.parse(rawSpec) : (rawSpec || {});\n    const parts = [];\n    // Deployment/ReplicaSet/StatefulSet/DaemonSet\n    if (spec.replicas !== undefined) parts.push(`replicas=${spec.replicas}`);\n    // Pod containers\n    const containers = spec.containers || spec.template?.spec?.containers || [];\n    if (containers.length) {\n      parts.push(`containers=[${containers.map(c => `${c.name}:${c.image||'?'}`).join(', ')}]`);\n    }\n    // Service\n    if (spec.type && kind === 'Service') parts.push(`type=${spec.type}`);\n    if (spec.ports) parts.push(`ports=[${spec.ports.map(p => `${p.port}/${p.protocol||'TCP'}`).join(',')}]`);\n    if (spec.clusterIP) parts.push(`clusterIP=${spec.clusterIP}`);\n    // Secret\n    if (kind === 'Secret') {\n      parts.push(`type=${spec.type || 'Opaque'}`);\n      if (spec.dataKeys) parts.push(`keys=[${spec.dataKeys.join(',')}]`);\n    }\n    // PVC\n    if (spec.resources?.requests?.storage) parts.push(`storage=${spec.resources.requests.storage}`);\n    if (spec.storageClassName) parts.push(`storageClass=${spec.storageClassName}`);\n    // Status info\n    if (spec.phase) parts.push(`phase=${spec.phase}`);\n    if (spec.readyReplicas !== undefined) parts.push(`ready=${spec.readyReplicas}`);\n    if (spec.availableReplicas !== undefined) parts.push(`available=${spec.availableReplicas}`);\n    return parts.join('; ') || 'no-spec';\n  } catch (_) { return 'parse-error'; }\n}\n\nconst specSummary = buildSpecSummary(src.kind, src.raw_spec_json);\n\nreturn [{\n  json: {\n    pageContent: src.embed_text,\n    metadata: {\n      resource_uid:           src.resource_uid,\n      kind:                   src.kind,\n      api_version:            src.api_version,\n      namespace:              src.namespace,\n      name:                   src.name,\n      labels:                 JSON.stringify(src.labels || {}),\n      annotations:            JSON.stringify(src.annotations || {}),\n      spec_summary:           specSummary,\n      last_updated_timestamp: src.last_updated_timestamp\n    }\n  }\n}];"
+        "jsCode": "const src = $('Parse Message').first().json;\n\n// Build a compact spec summary instead of sending the entire raw_spec_json\n// This reduces per-result payload from ~5KB to ~200 bytes\nfunction buildSpecSummary(kind, rawSpec) {\n  try {\n    const spec = typeof rawSpec === 'string' ? JSON.parse(rawSpec) : (rawSpec || {});\n    const parts = [];\n    // Deployment/ReplicaSet/StatefulSet/DaemonSet\n    if (spec.replicas !== undefined) parts.push(`replicas=${spec.replicas}`);\n    // Pod containers\n    const containers = spec.containers || spec.template?.spec?.containers || [];\n    if (containers.length) {\n      parts.push(`containers=[${containers.map(c => `${c.name}:${c.image||'?'}`).join(', ')}]`);\n    }\n    // Service\n    if (spec.type && kind === 'Service') parts.push(`type=${spec.type}`);\n    if (spec.ports) parts.push(`ports=[${spec.ports.map(p => `${p.port}/${p.protocol||'TCP'}`).join(',')}]`);\n    if (spec.clusterIP) parts.push(`clusterIP=${spec.clusterIP}`);\n    // ConfigMap\n    if (kind === 'ConfigMap') {\n      const keys = Object.keys(spec);\n      if (keys.length) parts.push(`keys=[${keys.join(',')}]`);\n      for (const k of keys.slice(0, 3)) {\n        const v = String(spec[k] || '').substring(0, 100);\n        parts.push(`${k}=${v}${spec[k]?.length > 100 ? '...' : ''}`);\n      }\n    }\n    // Secret\n    if (kind === 'Secret') {\n      parts.push(`type=${spec.type || 'Opaque'}`);\n      if (spec.dataKeys) parts.push(`keys=[${spec.dataKeys.join(',')}]`);\n    }\n    // PVC\n    if (spec.resources?.requests?.storage) parts.push(`storage=${spec.resources.requests.storage}`);\n    if (spec.storageClassName) parts.push(`storageClass=${spec.storageClassName}`);\n    // Status info\n    if (spec.phase) parts.push(`phase=${spec.phase}`);\n    if (spec.readyReplicas !== undefined) parts.push(`ready=${spec.readyReplicas}`);\n    if (spec.availableReplicas !== undefined) parts.push(`available=${spec.availableReplicas}`);\n    return parts.join('; ') || 'no-spec';\n  } catch (_) { return 'parse-error'; }\n}\n\nconst specSummary = buildSpecSummary(src.kind, src.raw_spec_json);\n\nreturn [{\n  json: {\n    pageContent: src.embed_text,\n    metadata: {\n      resource_uid:           src.resource_uid,\n      kind:                   src.kind,\n      api_version:            src.api_version,\n      namespace:              src.namespace,\n      name:                   src.name,\n      labels:                 JSON.stringify(src.labels || {}),\n      annotations:            JSON.stringify(src.annotations || {}),\n      spec_summary:           specSummary,\n      last_updated_timestamp: src.last_updated_timestamp\n    }\n  }\n}];"
       },
       "id": "format-document",
       "name": "Format Document",
@@ -108,7 +108,10 @@
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ model: 'nomic-embed-text:latest', prompt: $json.pageContent }) }}",
-        "options": {}
+        "options": {
+          "batching": { "batch": { "batchSize": 1, "batchInterval": 1000 } },
+          "timeout": 30000
+        }
       },
       "id": "generate-embedding",
       "name": "Generate Embedding",
@@ -117,7 +120,10 @@
       "position": [
         1300,
         420
-      ]
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
     },
     {
       "parameters": {
@@ -126,7 +132,9 @@
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ points: [{ id: $('Format Document').first().json.metadata.resource_uid, vector: $json.embedding, payload: { pageContent: $('Format Document').first().json.pageContent, metadata: $('Format Document').first().json.metadata } }] }) }}",
-        "options": {}
+        "options": {
+          "timeout": 10000
+        }
       },
       "id": "upsert-to-qdrant",
       "name": "Upsert to Qdrant",
@@ -135,7 +143,10 @@
       "position": [
         1520,
         420
-      ]
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
     }
   ],
   "connections": {
@@ -154,17 +165,6 @@
       "main": [
         [
           {
-            "node": "Delete Existing Vector",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Delete Existing Vector": {
-      "main": [
-        [
-          {
             "node": "Is Delete Event?",
             "type": "main",
             "index": 0
@@ -174,7 +174,13 @@
     },
     "Is Delete Event?": {
       "main": [
-        [],
+        [
+          {
+            "node": "Delete Existing Vector",
+            "type": "main",
+            "index": 0
+          }
+        ],
         [
           {
             "node": "Format Document",

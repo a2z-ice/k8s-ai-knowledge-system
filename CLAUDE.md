@@ -150,7 +150,7 @@ npm test                           # all 10 tests
 npm run test:single "create namespace"   # single test by name
 ```
 
-**E2E test design:** Tests 1–4 and 6–7 simulate CDC processing inline (embed + upsert directly to Qdrant) — they do NOT depend on n8n workflows being active. Test 5 (`Reset`) does require the n8n reset webhook. Tests 8–10 exercise the full native LangChain AI Agent pipeline via the live n8n webhook (`/webhook/k8s-ai-chat/chat`): Chat Trigger → AI Agent → Qdrant Vector Store (tool) + Ollama Chat Model + Embeddings Ollama. If tests 1–4 pass but test 5 fails with 404, run `/reimport-workflows`. Tests 8–10 require AI_K8s_Flow to be active (webhook returns 200). All qdrantUpsert calls now include `pageContent` in the payload (required by the native Qdrant retriever).
+**E2E test design:** Tests 1–4 and 6–7 simulate CDC processing inline (embed + upsert directly to Qdrant) — they do NOT depend on n8n workflows being active. Test 5 (`Reset`) does require the n8n reset webhook. Tests 8–10 exercise the full multi-tool AI Agent pipeline via the live n8n webhook (`/webhook/k8s-ai-chat/chat`): Chat Trigger → AI Agent → kubernetes_search (Qdrant Vector Store tool) + kubernetes_inventory (Code Tool) + Ollama Chat Model + Embeddings Ollama. Tests 13–15 are accuracy tests comparing AI chat output against real `kubectl` results for pods, deployments, and namespaces. If tests 1–4 pass but test 5 fails with 404, run `/reimport-workflows`. Tests 8–10 and 13–15 require AI_K8s_Flow to be active (webhook returns 200). All qdrantUpsert calls include `pageContent` in the payload (required by the native Qdrant retriever).
 
 **Test ordering:** Test 5 (Reset) is declared **last** in the spec file (after tests 6–10) despite being numbered 5 — this is intentional. Reset wipes Qdrant, so it must execute after all other tests. Playwright runs tests in declaration order within the file.
 
@@ -202,14 +202,15 @@ k8s-watcher (K8s API watch)
   → Insert Vector (Qdrant PUT /points)
 ```
 
-### AI K8s Flow (query pipeline)
+### AI K8s Flow (multi-tool query pipeline)
 ```
 User query (n8n Chat Trigger)
-  → Generate Embedding (Ollama nomic-embed-text)
-  → Qdrant vector search (cosine ≥ 0.3, top 30)
-  → Build Prompt (system prompt + retrieved context)
-  → LLM Chat (Ollama qwen3:8b, temperature 0.1)
-  → Format Response → output
+  → AI Agent (toolsAgent, maxIterations=5)
+      ├── Tool: kubernetes_inventory (Code Tool → HTTP Qdrant scroll → group by kind/ns)
+      ├── Tool: kubernetes_search   (Qdrant Vector Store → Embeddings Ollama → topK=20)
+      ├── LLM: Ollama Chat Model    (qwen3:14b-k8s, temperature 0)
+      └── Memory: Postgres Chat     (session: k8s-ai-global, contextWindow: 5)
+  → Response (markdown table)
 ```
 
 ### Reset K8s Flow (manual re-index)
@@ -253,7 +254,7 @@ Collection `k8s`, 768-dim Cosine. Point ID = `resource_uid` (UUID from k8s). Pay
 | Kafka consumer group | `n8n-cdc-consumer` |
 | Qdrant collection | `k8s` |
 | Embedding model | `nomic-embed-text:latest` (768-dim) |
-| Chat model | `qwen3:8b` |
+| Chat model | `qwen3:14b-k8s` |
 | kind cluster | `k8s-ai` (context: `kind-k8s-ai`) |
 | k8s namespace | `k8s-ai` |
 

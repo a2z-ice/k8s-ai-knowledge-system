@@ -44,24 +44,25 @@
  * directly so qdrantGet(uid) still works for test-inserted points.  The CDC flow's
  * filter-delete finds both test-inserted and CDC-inserted points via metadata.resource_uid.
  *
- * AI flow topology (AI_K8s_Flow — enriched inventory + AI Agent):
+ * AI flow topology (AI_K8s_Flow — multi-tool AI Agent):
  *
  *   When chat message received
  *     │ (main)
- *     └→ Scroll All Resources  (HTTP → Qdrant scroll, limit 200)
- *          │ (main)
- *          └→ Build Inventory  (Code: group by kind/namespace, enrich chatInput)
- *               │ (main)
- *               └→ AI Agent  (promptType: "define", text: "={{ $json.chatInput }}")
- *                    │ (ai_languageModel)   │ (ai_tool)   │ (ai_memory)
- *                    ▼                      ▼              ▼
- *               Ollama Chat Model    Qdrant Vector Store  Postgres Chat Memory
- *               (qwen3:14b-k8s, 0)  (retrieve-as-tool,   (n8n_chat_histories,
- *                                    topK=20)             session: k8s-ai-global,
- *                                         │ (ai_embedding) contextWindow: 5)
- *                                         ▼
- *                                   Embeddings Ollama
- *                                   (nomic-embed-text, 768-dim)
+ *     └→ AI Agent  (toolsAgent, maxIterations=5)
+ *          │ (ai_languageModel)   │ (ai_tool)              │ (ai_tool)       │ (ai_memory)
+ *          ▼                      ▼                        ▼                 ▼
+ *     Ollama Chat Model    Qdrant Vector Store     Code Tool            Postgres Chat Memory
+ *     (qwen3:14b-k8s, 0)  "kubernetes_search"     "kubernetes_inventory" (n8n_chat_histories,
+ *                          (retrieve-as-tool,      (HTTP→Qdrant scroll,   session: k8s-ai-global,
+ *                           topK=20)                group by kind/ns)     contextWindow: 5)
+ *                               │ (ai_embedding)
+ *                               ▼
+ *                         Embeddings Ollama
+ *                         (nomic-embed-text, 768-dim)
+ *
+ * Tool selection by the AI Agent:
+ *   - kubernetes_inventory: counting, listing all, aggregation queries
+ *   - kubernetes_search: specific resource details, search by name/label
  *
  * Memory is stored in postgres (n8n_memory DB, n8n_chat_histories table).
  * Memory_Clear_Flow: Manual Trigger + hourly Schedule → DELETE FROM n8n_chat_histories
