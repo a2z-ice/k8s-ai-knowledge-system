@@ -641,7 +641,12 @@ http://localhost:30000/webhook/k8s-ai-chat/chat
 
 ![AI chat public interface — n8n-rendered chat widget](screenshots/09-ai-chat-public.png)
 
-A chat widget renders with an input field at the bottom. This page does not require the n8n owner login — it is accessible to anyone who can reach the endpoint.
+A chat widget renders with the title **"K8s AI Assistant"** and the greeting:
+
+> Hi there! 👋
+> My name is Assad. I am k8s assistant for the kind cluster k8s-ai. How can I assist you today?
+
+This page does not require the n8n owner login — it is accessible to anyone who can reach the endpoint.
 
 ### H1. Test Query 1 — Deployment List with Replica Counts
 

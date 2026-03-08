@@ -5,7 +5,7 @@
     {
       "parameters": {
         "public": true,
-        "initialMessages": "Hi there! 👋\nMy name is Assad. How can I assist you today?",
+        "initialMessages": "Hi there! 👋\nMy name is Assad. I am k8s assistant for the kind cluster k8s-ai. How can I assist you today?",
         "options": {
           "title": "K8s AI Assistant",
           "subtitle": "Ask me anything about your Kubernetes cluster"
