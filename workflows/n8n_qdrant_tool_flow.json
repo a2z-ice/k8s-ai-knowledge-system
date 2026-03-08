@@ -1,0 +1,115 @@
+{
+  "id": "k8sToolflow0001",
+  "name": "K8s_Query_Tool_Flow",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "defineBelow",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "query",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "tool-trigger",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json.query || '';\n\n// Parse kind and namespace from the input\nconst kindMatch = input.match(/kind\\s*=\\s*(\\w+)/i);\nconst nsMatch = input.match(/namespace\\s*=\\s*([\\w-]+)/i);\n\nconst must = [];\nif (kindMatch && kindMatch[1].toLowerCase() !== 'all') {\n  must.push({ key: 'metadata.kind', match: { value: kindMatch[1] } });\n}\nif (nsMatch && nsMatch[1].toLowerCase() !== 'all') {\n  must.push({ key: 'metadata.namespace', match: { value: nsMatch[1] } });\n}\n\nconst body = { limit: 200, with_payload: { include: ['metadata'] } };\nif (must.length > 0) body.filter = { must };\n\nreturn [{ json: { qdrantBody: JSON.stringify(body) } }];"
+      },
+      "id": "parse-input",
+      "name": "Parse Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://qdrant:6333/collections/k8s/points/scroll",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.qdrantBody }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "query-qdrant",
+      "name": "Query Qdrant",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        640,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const qdrantResponse = $('Query Qdrant').first().json;\nconst points = qdrantResponse.result?.points || [];\n\nif (points.length === 0) {\n  return [{ json: { response: 'No matching Kubernetes resources found.' } }];\n}\n\nconst lines = points.map(p => {\n  const m = p.payload?.metadata || {};\n  return `${m.kind || '?'} | ${m.name || '?'} | ${m.namespace || 'cluster-scoped'} | ${m.spec_summary || '-'}`;\n});\n\nconst response = `Kind | Name | Namespace | Details\\n` + lines.join('\\n') + `\\n\\nTotal: ${points.length} resources`;\n\nreturn [{ json: { response } }];"
+      },
+      "id": "format-results",
+      "name": "Format Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        860,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Parse Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Input": {
+      "main": [
+        [
+          {
+            "node": "Query Qdrant",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Qdrant": {
+      "main": [
+        [
+          {
+            "node": "Format Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

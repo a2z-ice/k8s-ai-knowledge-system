@@ -23,9 +23,48 @@
     },
     {
       "parameters": {
-        "agent": "toolsAgent",
+        "method": "POST",
+        "url": "http://qdrant:6333/collections/k8s/points/scroll",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"limit\":200,\"with_payload\":{\"include\":[\"metadata\"]}}",
         "options": {
-          "systemMessage": "You are a Kubernetes cluster monitoring assistant.\nEvery question is about the LIVE cluster. Always call the tool first.\n\nRules:\n1. ALWAYS use kubernetes_knowledge_base tool before answering.\n2. Answer ONLY from tool results. Never invent data.\n3. Output a concise markdown table with columns: Kind | Name | Namespace | Details.\n4. Include ALL matching resources from the tool results — do not omit any.\n5. After the table, add at most one summary sentence.\n6. Never output raw JSON, reasoning, or chain-of-thought.\n7. Never expose resource_uid or secret data values.\n8. If no results: | Status | No indexed Kubernetes resources found |",
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "scroll-qdrant",
+      "name": "Scroll All Resources",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatInput = $('When chat message received').first().json.chatInput;\nconst qdrantResponse = $('Scroll All Resources').first().json;\nconst points = qdrantResponse.result?.points || [];\n\n// Build structured inventory grouped by kind\nconst byKind = {};\nfor (const p of points) {\n  const m = p.payload?.metadata || {};\n  const kind = m.kind || '?';\n  if (!byKind[kind]) byKind[kind] = [];\n  byKind[kind].push({ name: m.name, namespace: m.namespace || 'cluster-scoped', spec: m.spec_summary || '-' });\n}\n\n// Build compact inventory text\nlet inventory = '';\nfor (const [kind, items] of Object.entries(byKind).sort()) {\n  // Group by namespace within each kind\n  const byNs = {};\n  for (const item of items) {\n    if (!byNs[item.namespace]) byNs[item.namespace] = [];\n    byNs[item.namespace].push(item.name);\n  }\n  inventory += `\\n${kind} (${items.length} total):`;\n  for (const [ns, names] of Object.entries(byNs).sort()) {\n    inventory += `\\n  ${ns}: ${names.join(', ')}`;\n  }\n}\n\n// Enrich chatInput with inventory context\nconst enrichedInput = `[CLUSTER INVENTORY - ${points.length} resources total]\n${inventory}\n\n[USER QUESTION]\n${chatInput}`;\n\nreturn [{ json: { chatInput: enrichedInput } }];"
+      },
+      "id": "build-inventory",
+      "name": "Build Inventory",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        620,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "agent": "toolsAgent",
+        "promptType": "define",
+        "text": "={{ $json.chatInput }}",
+        "options": {
+          "systemMessage": "You are a Kubernetes cluster monitoring assistant.\n\n/no_think\n\nThe user's message starts with [CLUSTER INVENTORY] containing ALL resources in the cluster, followed by [USER QUESTION].\n\nRules:\n1. Answer from the CLUSTER INVENTORY data provided in the message. This is the authoritative source.\n2. For specific resource details, optionally use the kubernetes_search tool.\n3. NEVER invent or hallucinate data. Only use inventory data.\n4. Output concise markdown tables only.\n5. For counting queries: | Namespace | Count |\n6. For listing: | Kind | Name | Namespace | Details |\n7. One summary sentence max.\n8. Never expose resource_uid or secret data values.",
           "maxIterations": 2
         }
       },
@@ -34,16 +73,16 @@
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 1.7,
       "position": [
-        420,
+        840,
         300
       ]
     },
     {
       "parameters": {
-        "model": "qwen3:8b-k8s",
+        "model": "qwen3:14b-k8s",
         "options": {
           "temperature": 0,
-          "numPredict": 1024,
+          "numPredict": 2048,
           "numCtx": 32768
         }
       },
@@ -52,7 +91,7 @@
       "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
       "typeVersion": 1,
       "position": [
-        240,
+        660,
         520
       ],
       "credentials": {
@@ -70,9 +109,9 @@
           "value": "k8s",
           "mode": "id"
         },
-        "toolName": "kubernetes_knowledge_base",
-        "toolDescription": "Search the Kubernetes cluster knowledge base by semantic similarity. Use this for ANY question about pods, deployments, services, namespaces, secrets, configmaps, replicasets, statefulsets, daemonsets, PVCs, or other Kubernetes resources. Returns matching resources with kind, name, namespace, and spec summary.",
-        "topK": 30,
+        "toolName": "kubernetes_search",
+        "toolDescription": "Semantic search of the Kubernetes cluster knowledge base. Use for detailed lookups about specific resources. Returns the most relevant resources with metadata.",
+        "topK": 20,
         "includeDocumentMetadata": true,
         "options": {
           "contentPayloadKey": "pageContent",
@@ -84,7 +123,7 @@
       "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
       "typeVersion": 1,
       "position": [
-        560,
+        860,
         520
       ],
       "credentials": {
@@ -104,7 +143,7 @@
       "type": "@n8n/n8n-nodes-langchain.embeddingsOllama",
       "typeVersion": 1,
       "position": [
-        560,
+        860,
         720
       ],
       "credentials": {
@@ -126,7 +165,7 @@
       "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
       "typeVersion": 1.3,
       "position": [
-        420,
+        740,
         720
       ],
       "credentials": {
@@ -139,6 +178,28 @@
   ],
   "connections": {
     "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "Scroll All Resources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scroll All Resources": {
+      "main": [
+        [
+          {
+            "node": "Build Inventory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Inventory": {
       "main": [
         [
           {

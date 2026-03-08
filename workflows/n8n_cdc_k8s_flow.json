@@ -103,82 +103,39 @@
     },
     {
       "parameters": {
-        "dataType": "json",
-        "jsonMode": "expressionData",
-        "jsonData": "={{ $json.pageContent }}",
-        "textSplittingMode": "simple",
-        "options": {
-          "metadata": {
-            "metadataValues": [
-              { "name": "resource_uid", "value": "={{ $json.metadata.resource_uid }}" },
-              { "name": "kind", "value": "={{ $json.metadata.kind }}" },
-              { "name": "api_version", "value": "={{ $json.metadata.api_version }}" },
-              { "name": "namespace", "value": "={{ $json.metadata.namespace }}" },
-              { "name": "name", "value": "={{ $json.metadata.name }}" },
-              { "name": "labels", "value": "={{ $json.metadata.labels }}" },
-              { "name": "annotations", "value": "={{ $json.metadata.annotations }}" },
-              { "name": "spec_summary", "value": "={{ $json.metadata.spec_summary }}" },
-              { "name": "last_updated_timestamp", "value": "={{ $json.metadata.last_updated_timestamp }}" }
-            ]
-          }
-        }
+        "method": "POST",
+        "url": "http://host.docker.internal:11434/api/embeddings",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'nomic-embed-text:latest', prompt: $json.pageContent }) }}",
+        "options": {}
       },
-      "id": "default-data-loader",
-      "name": "Default Data Loader",
-      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
-      "typeVersion": 1.1,
+      "id": "generate-embedding",
+      "name": "Generate Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
       "position": [
-        1080,
-        620
+        1300,
+        420
       ]
     },
     {
       "parameters": {
-        "mode": "insert",
-        "qdrantCollection": {
-          "__rl": true,
-          "value": "k8s",
-          "mode": "id"
-        },
-        "options": {
-          "contentPayloadKey": "pageContent",
-          "metadataPayloadKey": "metadata"
-        }
-      },
-      "id": "insert-to-qdrant",
-      "name": "Insert to Qdrant",
-      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
-      "typeVersion": 1,
-      "position": [
-        1300,
-        420
-      ],
-      "credentials": {
-        "qdrantApi": {
-          "id": "qdrant-local",
-          "name": "Qdrant Local"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "model": "nomic-embed-text:latest",
+        "method": "PUT",
+        "url": "http://qdrant:6333/collections/k8s/points",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ points: [{ id: $('Format Document').first().json.metadata.resource_uid, vector: $json.embedding, payload: { pageContent: $('Format Document').first().json.pageContent, metadata: $('Format Document').first().json.metadata } }] }) }}",
         "options": {}
       },
-      "id": "embeddings-ollama-cdc",
-      "name": "Embeddings Ollama",
-      "type": "@n8n/n8n-nodes-langchain.embeddingsOllama",
-      "typeVersion": 1,
+      "id": "upsert-to-qdrant",
+      "name": "Upsert to Qdrant",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
       "position": [
-        1300,
-        620
-      ],
-      "credentials": {
-        "ollamaApi": {
-          "id": "ollama-local",
-          "name": "Ollama Local"
-        }
-      }
+        1520,
+        420
+      ]
     }
   ],
   "connections": {
@@ -231,30 +188,19 @@
       "main": [
         [
           {
-            "node": "Insert to Qdrant",
+            "node": "Generate Embedding",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Default Data Loader": {
-      "ai_document": [
+    "Generate Embedding": {
+      "main": [
         [
           {
-            "node": "Insert to Qdrant",
-            "type": "ai_document",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Embeddings Ollama": {
-      "ai_embedding": [
-        [
-          {
-            "node": "Insert to Qdrant",
-            "type": "ai_embedding",
+            "node": "Upsert to Qdrant",
+            "type": "main",
             "index": 0
           }
         ]

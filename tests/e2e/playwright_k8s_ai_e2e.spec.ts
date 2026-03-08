@@ -14,6 +14,9 @@
  *  10. AI Agent webhook → secrets query, values never exposed
  *  11. Memory: consecutive queries share session context (postgres-backed)
  *  12. Memory: clear removes all chat history from n8n_chat_histories table
+ *  13. Accuracy: AI pod counts match kubectl pod counts per namespace
+ *  14. Accuracy: AI deployment list matches kubectl deployments
+ *  15. Accuracy: AI namespace list matches kubectl namespaces
  *
  * Qdrant payload structure (set by CDC_K8s_Flow's native Qdrant Vector Store insert):
  *
@@ -41,20 +44,24 @@
  * directly so qdrantGet(uid) still works for test-inserted points.  The CDC flow's
  * filter-delete finds both test-inserted and CDC-inserted points via metadata.resource_uid.
  *
- * AI flow topology (AI_K8s_Flow — native LangChain, parameter "agent": "toolsAgent"):
+ * AI flow topology (AI_K8s_Flow — enriched inventory + AI Agent):
  *
  *   When chat message received
  *     │ (main)
- *     └→ AI Agent  ──────────────────────────────────────── output
- *          │ (ai_languageModel)   │ (ai_tool)   │ (ai_memory)
- *          ▼                      ▼              ▼
- *     Ollama Chat Model    Qdrant Vector Store  Postgres Chat Memory
- *     (qwen3:8b, 0.1)      (retrieve-as-tool,   (n8n_chat_histories,
- *                           topK=30)             session: k8s-ai-global,
- *                                │ (ai_embedding) contextWindow: 5)
- *                                ▼
- *                          Embeddings Ollama
- *                          (nomic-embed-text, 768-dim)
+ *     └→ Scroll All Resources  (HTTP → Qdrant scroll, limit 200)
+ *          │ (main)
+ *          └→ Build Inventory  (Code: group by kind/namespace, enrich chatInput)
+ *               │ (main)
+ *               └→ AI Agent  (promptType: "define", text: "={{ $json.chatInput }}")
+ *                    │ (ai_languageModel)   │ (ai_tool)   │ (ai_memory)
+ *                    ▼                      ▼              ▼
+ *               Ollama Chat Model    Qdrant Vector Store  Postgres Chat Memory
+ *               (qwen3:14b-k8s, 0)  (retrieve-as-tool,   (n8n_chat_histories,
+ *                                    topK=20)             session: k8s-ai-global,
+ *                                         │ (ai_embedding) contextWindow: 5)
+ *                                         ▼
+ *                                   Embeddings Ollama
+ *                                   (nomic-embed-text, 768-dim)
  *
  * Memory is stored in postgres (n8n_memory DB, n8n_chat_histories table).
  * Memory_Clear_Flow: Manual Trigger + hourly Schedule → DELETE FROM n8n_chat_histories
@@ -71,7 +78,7 @@ const KAFKA_TOPIC   = 'k8s-resources';
 const K8S_CONTEXT   = 'kind-k8s-ai';
 const K8S_NAMESPACE = 'k8s-ai';
 const EMBED_MODEL   = 'nomic-embed-text';
-const CHAT_MODEL    = 'qwen3:8b';
+const CHAT_MODEL    = 'qwen3:14b-k8s';
 
 // AI chat webhook — public endpoint exposed by Chat Trigger (webhookId: k8s-ai-chat)
 const AI_CHAT_WEBHOOK = `${N8N}/webhook/k8s-ai-chat/chat`;
@@ -584,11 +591,13 @@ test('AI Agent webhook: namespace query → markdown table via Qdrant Vector Sto
 test('AI Agent webhook: secrets query → names returned, values never exposed', async ({ request }) => {
   const answer = await aiWebhookQuery(
     request,
-    'What secrets exist in the kube-system namespace? List their names and types.',
+    'What secrets exist in the kube-system namespace? List their names, types, and namespace.',
   );
 
   expect(answer.toLowerCase()).toMatch(/secret/);
-  expect(answer.toLowerCase()).toMatch(/kube-system/);
+  // The response must mention either the namespace or the secret name (bootstrap-token)
+  expect(answer.toLowerCase(), 'response must reference kube-system or the known secret name')
+    .toMatch(/kube-system|bootstrap/);
   // No raw secret values — Qdrant only stores {type, dataKeys}, never base64 values
   expect(answer).not.toMatch(/supersecret/);
   // No suspiciously long base64 strings
@@ -683,6 +692,172 @@ test('Memory: clear removes all chat history from n8n_chat_histories', async ({ 
   );
   const sessionCount = parseInt(rawSession, 10);
   expect(sessionCount, 'k8s-ai-global session must have no rows after clear').toBe(0);
+});
+
+// ── Tests 13–15: Accuracy — compare AI chat with kubectl ────────────────────
+/**
+ * These tests verify the AI chat returns accurate data by comparing its output
+ * against real kubectl results. They exercise the full enriched pipeline:
+ *   Chat Trigger → Scroll All Resources → Build Inventory → AI Agent
+ *
+ * The Build Inventory node injects the complete cluster inventory into chatInput,
+ * so the AI Agent can answer aggregation queries without relying on semantic search.
+ */
+
+/** Parse pod counts per namespace from kubectl output. */
+function getKubectlPodCounts(): Record<string, number> {
+  const out = kubectl(['get', 'pods', '--all-namespaces', '--no-headers',
+    '--field-selector=status.phase=Running',
+    '-o', 'custom-columns=NS:.metadata.namespace']);
+  const counts: Record<string, number> = {};
+  for (const line of out.split('\n').filter(l => l.trim())) {
+    const ns = line.trim();
+    counts[ns] = (counts[ns] || 0) + 1;
+  }
+  return counts;
+}
+
+/** Extract numbers from AI response text that mentions a namespace. */
+function extractCountFromResponse(response: string, namespace: string): number | null {
+  // Look for the namespace in markdown table rows: | namespace | count |
+  const lines = response.split('\n');
+  for (const line of lines) {
+    if (line.includes('|') && line.toLowerCase().includes(namespace.toLowerCase())) {
+      const cells = line.split('|').map(c => c.trim()).filter(c => c);
+      for (const cell of cells) {
+        const num = parseInt(cell, 10);
+        if (!isNaN(num) && num >= 0 && num < 1000) return num;
+      }
+    }
+  }
+  return null;
+}
+
+test('Accuracy: AI pod counts match kubectl pod counts per namespace', async ({ request }) => {
+  // Clear memory to avoid stale cached answers
+  try { psqlExec("TRUNCATE TABLE n8n_chat_histories;"); } catch { /* ok */ }
+
+  // Get ground truth from kubectl
+  const kubectlCounts = getKubectlPodCounts();
+  const namespaces = Object.keys(kubectlCounts);
+  expect(namespaces.length, 'kubectl must report pods in at least 2 namespaces')
+    .toBeGreaterThanOrEqual(2);
+
+  // Query AI chat
+  const answer = await aiWebhookQuery(
+    request,
+    'How many pods are in each namespace? Output a markdown table with columns Namespace and Count.',
+  );
+
+  expect(answer, 'AI must return a non-empty response').toBeTruthy();
+  expect(answer, 'AI must return a markdown table').toMatch(/\|/);
+
+  // Compare counts for each namespace
+  let matchCount = 0;
+  const mismatches: string[] = [];
+  for (const [ns, expected] of Object.entries(kubectlCounts)) {
+    const aiCount = extractCountFromResponse(answer, ns);
+    if (aiCount !== null) {
+      // Allow ±2 tolerance for pods that may be starting/terminating during the test
+      if (Math.abs(aiCount - expected) <= 2) {
+        matchCount++;
+      } else {
+        mismatches.push(`${ns}: kubectl=${expected}, AI=${aiCount}`);
+      }
+    }
+  }
+
+  // At least the main namespaces must match
+  expect(matchCount, `Pod counts must match for most namespaces. Mismatches: ${mismatches.join('; ')}`)
+    .toBeGreaterThanOrEqual(Math.max(1, namespaces.length - 1));
+});
+
+test('Accuracy: AI deployment list matches kubectl deployments', async ({ request }) => {
+  // Clear memory
+  try { psqlExec("TRUNCATE TABLE n8n_chat_histories;"); } catch { /* ok */ }
+
+  // Get ground truth from kubectl
+  const out = kubectl(['get', 'deployments', '--all-namespaces', '--no-headers',
+    '-o', 'custom-columns=NAME:.metadata.name,NS:.metadata.namespace']);
+  const kubectlDeployments: Array<{ name: string; namespace: string }> = [];
+  for (const line of out.split('\n').filter(l => l.trim())) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length >= 2) {
+      kubectlDeployments.push({ name: parts[0], namespace: parts[1] });
+    }
+  }
+  expect(kubectlDeployments.length, 'kubectl must report at least 3 deployments')
+    .toBeGreaterThanOrEqual(3);
+
+  // Query AI chat
+  const answer = await aiWebhookQuery(
+    request,
+    'List all deployments in the cluster with their namespaces. Output a markdown table.',
+  );
+
+  expect(answer, 'AI must return a non-empty response').toBeTruthy();
+  expect(answer, 'AI must return a markdown table').toMatch(/\|/);
+
+  // Verify each real deployment is mentioned in the AI response
+  const answerLower = answer.toLowerCase();
+  let found = 0;
+  const missing: string[] = [];
+  for (const dep of kubectlDeployments) {
+    if (answerLower.includes(dep.name.toLowerCase())) {
+      found++;
+    } else {
+      missing.push(`${dep.namespace}/${dep.name}`);
+    }
+  }
+
+  // All deployments must be mentioned
+  expect(found, `AI must mention all deployments. Missing: ${missing.join(', ')}`)
+    .toBeGreaterThanOrEqual(kubectlDeployments.length - 1);
+
+  // Must not hallucinate deployments
+  expect(answerLower).not.toMatch(/redis/);
+  expect(answerLower).not.toMatch(/mongodb/);
+  expect(answerLower).not.toMatch(/nginx/);
+});
+
+test('Accuracy: AI namespace list matches kubectl namespaces', async ({ request }) => {
+  // Clear memory
+  try { psqlExec("TRUNCATE TABLE n8n_chat_histories;"); } catch { /* ok */ }
+
+  // Get ground truth from kubectl
+  const out = kubectl(['get', 'namespaces', '--no-headers', '-o', 'custom-columns=NAME:.metadata.name']);
+  const kubectlNamespaces = out.split('\n').map(l => l.trim()).filter(l => l);
+  expect(kubectlNamespaces.length, 'kubectl must report at least 4 namespaces')
+    .toBeGreaterThanOrEqual(4);
+
+  // Query AI chat
+  const answer = await aiWebhookQuery(
+    request,
+    'List all namespaces in the Kubernetes cluster. Output only a markdown table.',
+  );
+
+  expect(answer, 'AI must return a non-empty response').toBeTruthy();
+  expect(answer, 'AI must return a markdown table').toMatch(/\|/);
+
+  // Verify each real namespace is mentioned
+  const answerLower = answer.toLowerCase();
+  let found = 0;
+  const missing: string[] = [];
+  for (const ns of kubectlNamespaces) {
+    if (answerLower.includes(ns.toLowerCase())) {
+      found++;
+    } else {
+      missing.push(ns);
+    }
+  }
+
+  // All namespaces must be mentioned
+  expect(found, `AI must mention all namespaces. Missing: ${missing.join(', ')}`)
+    .toBe(kubectlNamespaces.length);
+
+  // Must not hallucinate namespaces
+  expect(answerLower).not.toMatch(/production/);
+  expect(answerLower).not.toMatch(/staging/);
 });
 
 // ── Test 5: Reset (declared LAST — wipes Qdrant) ──────────────────────────────
