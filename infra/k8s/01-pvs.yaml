@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: n8n-pv
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: /data/n8n
+    type: DirectoryOrCreate
+  claimRef:
+    namespace: k8s-ai
+    name: n8n-pvc
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: qdrant-pv
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: /data/qdrant
+    type: DirectoryOrCreate
+  claimRef:
+    namespace: k8s-ai
+    name: qdrant-pvc
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: kafka-pv
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: /data/kafka
+    type: DirectoryOrCreate
+  claimRef:
+    namespace: k8s-ai
+    name: kafka-pvc
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: postgres-pv
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: /data/postgres
+    type: DirectoryOrCreate
+  claimRef:
+    namespace: k8s-ai
+    name: postgres-pvc

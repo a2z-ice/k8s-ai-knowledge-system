@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: k8s-watcher
+  namespace: k8s-ai
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: k8s-watcher
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "pods", "services", "configmaps", "persistentvolumeclaims", "secrets"]
+    verbs: ["list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: k8s-watcher
+subjects:
+  - kind: ServiceAccount
+    name: k8s-watcher
+    namespace: k8s-ai
+roleRef:
+  kind: ClusterRole
+  name: k8s-watcher
+  apiGroup: rbac.authorization.k8s.io

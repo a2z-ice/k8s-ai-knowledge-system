@@ -1,99 +1,224 @@
 {
+  "id": "k8sAIflow000001",
   "name": "AI_K8s_Flow",
   "nodes": [
     {
       "parameters": {
         "public": true,
-        "options": {}
+        "initialMessages": "Hi there! 👋\nMy name is Assad. I am k8s assistant for the kind cluster k8s-ai. How can I assist you today?",
+        "options": {
+          "title": "K8s AI Assistant",
+          "subtitle": "Ask me anything about your Kubernetes cluster"
+        }
       },
       "id": "chat-trigger",
-      "name": "Chat Trigger",
+      "name": "When chat message received",
       "type": "@n8n/n8n-nodes-langchain.chatTrigger",
-      "typeVersion": 1,
-      "position": [180, 300],
+      "typeVersion": 1.4,
+      "position": [
+        180,
+        300
+      ],
       "webhookId": "k8s-ai-chat"
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "http://host.docker.internal:11434/api/embed",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: 'nomic-embed-text', input: $json.chatInput }) }}",
+        "agent": "toolsAgent",
+        "options": {
+          "systemMessage": "You are a Kubernetes cluster monitoring assistant for the kind cluster \"k8s-ai\".\n\n/no_think\n\nYou have TWO tools. You MUST call a tool before EVERY answer — never rely on chat history or memory alone.\n\n## Tool Selection\n\n**kubernetes_inventory** — ALWAYS use this when the question involves:\n- Counting (\"how many pods/configmaps/deployments?\")\n- Listing or showing ALL resources of a type (\"list all configmaps\", \"show me the configmaps\", \"what configmaps exist\", \"give me the names\")\n- Aggregation (\"resources per namespace\", \"pods in each namespace\")\n- Follow-up questions about resources previously counted or listed (\"show me those 2 configmaps\", \"what are their names\")\n- Cluster overview (\"what is running?\")\n\n**kubernetes_search** — Use this ONLY when the question is about:\n- ONE specific named resource (\"show me the coredns deployment spec\")\n- Searching by label (\"find services with app=kafka\")\n- Deep details about a single resource's containers, ports, or volumes\n\n## Critical Rules\n1. ALWAYS call a tool before answering — even for follow-up questions. Never answer from chat history alone.\n2. When in doubt between tools, use kubernetes_inventory — it returns ALL resources and is always complete.\n3. If the user previously counted N resources and now asks to list them, call kubernetes_inventory again — do NOT answer from memory.\n4. If one tool's results seem incomplete, call the other tool.\n5. NEVER invent or hallucinate resources, names, or counts. Only report what the tool returns.\n6. Read the tool output carefully — the NAMESPACE SUMMARY shows totals AND per-kind breakdowns. When asked about a specific kind (e.g. pods), report the count for THAT kind, not the namespace total.\n7. Output concise markdown tables for structured data.\n8. One summary sentence maximum after the table.\n9. Never expose resource_uid or secret data values.",
+          "maxIterations": 5
+        }
+      },
+      "id": "ai-agent",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "qwen3:14b-k8s",
+        "options": {
+          "temperature": 0,
+          "numPredict": 2048,
+          "numCtx": 32768
+        }
+      },
+      "id": "ollama-chat-model",
+      "name": "Ollama Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        300,
+        520
+      ],
+      "credentials": {
+        "ollamaApi": {
+          "id": "ollama-local",
+          "name": "Ollama Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "qdrantCollection": {
+          "__rl": true,
+          "value": "k8s",
+          "mode": "id"
+        },
+        "toolName": "kubernetes_search",
+        "toolDescription": "Search the Kubernetes cluster knowledge base by semantic similarity. Use this for specific resource lookups like 'show me the coredns deployment' or 'what services exist in kube-system'. Input should describe what you are looking for. Returns the most relevant resources with metadata including kind, name, namespace, labels, and spec details.",
+        "topK": 20,
+        "includeDocumentMetadata": true,
+        "options": {
+          "contentPayloadKey": "pageContent",
+          "metadataPayloadKey": "metadata"
+        }
+      },
+      "id": "qdrant-vector-store",
+      "name": "Qdrant Vector Store",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+      "typeVersion": 1,
+      "position": [
+        500,
+        520
+      ],
+      "credentials": {
+        "qdrantApi": {
+          "id": "qdrant-local",
+          "name": "Qdrant Local"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "nomic-embed-text:latest",
         "options": {}
       },
-      "id": "generate-embedding",
-      "name": "Generate Embedding",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [400, 300]
+      "id": "embeddings-ollama",
+      "name": "Embeddings Ollama",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOllama",
+      "typeVersion": 1,
+      "position": [
+        500,
+        720
+      ],
+      "credentials": {
+        "ollamaApi": {
+          "id": "ollama-local",
+          "name": "Ollama Local"
+        }
+      }
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "http://qdrant:6333/collections/k8s/points/search",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ vector: $json.embeddings[0], limit: 30, with_payload: true, score_threshold: 0.3 }) }}",
-        "options": {}
+        "name": "kubernetes_inventory",
+        "description": "Get a complete inventory of ALL Kubernetes resources in the cluster, grouped by kind and namespace with exact counts. Use this tool for counting queries (how many pods), listing all resources of a type, aggregation queries (resources per namespace), or cluster overview questions. Returns every resource organized by kind and namespace.",
+        "language": "javaScript",
+        "jsCode": "// Scroll ALL resources from Qdrant with pagination\nlet allPoints = [];\nlet offset = null;\ndo {\n  const body = { limit: 100, with_payload: { include: ['metadata'] } };\n  if (offset) body.offset = offset;\n  const response = await this.helpers.httpRequest({\n    method: 'POST',\n    url: 'http://qdrant:6333/collections/k8s/points/scroll',\n    body,\n    json: true\n  });\n  const page = response.result?.points || [];\n  allPoints.push(...page);\n  offset = response.result?.next_page_offset || null;\n} while (offset);\n\nif (allPoints.length === 0) return 'No Kubernetes resources found in the vector database.';\n\n// Parse all resources\nconst resources = allPoints.map(p => {\n  const m = p.payload?.metadata || {};\n  return {\n    kind: m.kind || '?',\n    name: m.name || '?',\n    namespace: m.namespace || 'cluster-scoped',\n    labels: m.labels || '{}',\n    spec: m.spec_summary || '-'\n  };\n});\n\n// === SECTION 1: Namespace summary (total resources per namespace) ===\nconst byNsAll = {};\nfor (const r of resources) {\n  if (!byNsAll[r.namespace]) byNsAll[r.namespace] = {};\n  byNsAll[r.namespace][r.kind] = (byNsAll[r.namespace][r.kind] || 0) + 1;\n}\nconst lines = [`CLUSTER INVENTORY — ${resources.length} resources total`, ''];\nlines.push('NAMESPACE SUMMARY:');\nlines.push('| Namespace | Total | Pod | Deployment | Service | ConfigMap | Secret | ReplicaSet | StatefulSet | DaemonSet | PVC | Other |');\nfor (const ns of Object.keys(byNsAll).sort()) {\n  const k = byNsAll[ns];\n  const total = Object.values(k).reduce((a, b) => a + b, 0);\n  const known = ['Pod','Deployment','Service','ConfigMap','Secret','ReplicaSet','StatefulSet','DaemonSet','PVC'];\n  const other = Object.entries(k).filter(([t]) => !known.includes(t)).reduce((a, [, c]) => a + c, 0);\n  lines.push(`| ${ns} | ${total} | ${known.map(t => k[t] || 0).join(' | ')} | ${other} |`);\n}\n\n// === SECTION 2: Detailed breakdown by kind ===\nlines.push('');\nlines.push('DETAILED BREAKDOWN BY KIND:');\nconst byKind = {};\nfor (const r of resources) {\n  if (!byKind[r.kind]) byKind[r.kind] = [];\n  byKind[r.kind].push(r);\n}\nfor (const kind of Object.keys(byKind).sort()) {\n  const items = byKind[kind];\n  const byNs = {};\n  for (const item of items) {\n    if (!byNs[item.namespace]) byNs[item.namespace] = [];\n    byNs[item.namespace].push(item);\n  }\n  lines.push(`${kind} (${items.length} total):`);\n  for (const ns of Object.keys(byNs).sort()) {\n    const nsItems = byNs[ns];\n    lines.push(`  ${ns} (${nsItems.length}):`);\n    for (const item of nsItems) {\n      lines.push(`    - ${item.name} [${item.spec}]`);\n    }\n  }\n}\n\nreturn lines.join('\\n');"
       },
-      "id": "qdrant-search",
-      "name": "Qdrant Search",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [620, 300]
+      "id": "tool-code-inventory",
+      "name": "Kubernetes Inventory Tool",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1,
+      "position": [
+        700,
+        520
+      ]
     },
     {
       "parameters": {
-        "jsCode": "const results = $json.result || [];\nconst query = $('Chat Trigger').first().json.chatInput;\n\nconst SYSTEM_PROMPT = `You are an expert Kubernetes AI assistant integrated with a RAG system.\n\nRules:\n- ONLY answer based on the retrieved context provided. Never hallucinate cluster state.\n- If context is empty or irrelevant, respond exactly: \"No indexed Kubernetes resources found in vector database.\"\n- Use markdown tables for structured/aggregated data.\n- Do not expose internal resource_uid values.\n- Be concise and technical.`;\n\nlet userMessage;\nif (results.length === 0) {\n  userMessage = `No resources were retrieved from the vector database.\\n\\nUser question: ${query}`;\n} else {\n  const ctx = results\n    .map((r, i) => {\n      const p = r.payload;\n      const spec = p.raw_spec_json ? p.raw_spec_json.substring(0, 300) : '{}';\n      const labels = JSON.stringify(p.labels || {});\n      return `[${i + 1}] kind=${p.kind}  name=${p.name}  namespace=${p.namespace || '(cluster-scoped)'}  labels=${labels}  score=${r.score.toFixed(3)}  spec=${spec}`;\n    })\n    .join('\\n');\n  userMessage = `Retrieved ${results.length} Kubernetes resources:\\n\\n${ctx}\\n\\nUser question: ${query}`;\n}\n\nreturn [{ json: { system_prompt: SYSTEM_PROMPT, user_message: userMessage } }];"
+        "sessionIdType": "customKey",
+        "sessionKey": "k8s-ai-global",
+        "tableName": "n8n_chat_histories",
+        "contextWindowLength": 5
       },
-      "id": "build-prompt",
-      "name": "Build Prompt",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [840, 300]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "http://host.docker.internal:11434/api/chat",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: 'qwen3:8b', messages: [ { role: 'system', content: $json.system_prompt }, { role: 'user', content: $json.user_message } ], stream: false, options: { temperature: 0.1 }, think: false }) }}",
-        "options": {}
-      },
-      "id": "llm-chat",
-      "name": "LLM Chat",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [1060, 300]
-    },
-    {
-      "parameters": {
-        "jsCode": "const r = $input.first().json;\nconst text = r?.message?.content || r?.response || 'No response from LLM.';\nreturn [{ json: { output: text } }];"
-      },
-      "id": "format-response",
-      "name": "Format Response",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [1280, 300]
+      "id": "postgres-memory",
+      "name": "Postgres Chat Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        380,
+        720
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-local",
+          "name": "Postgres Local"
+        }
+      }
     }
   ],
   "connections": {
-    "Chat Trigger": {
-      "main": [[{ "node": "Generate Embedding", "type": "main", "index": 0 }]]
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
-    "Generate Embedding": {
-      "main": [[{ "node": "Qdrant Search", "type": "main", "index": 0 }]]
+    "Ollama Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
     },
-    "Qdrant Search": {
-      "main": [[{ "node": "Build Prompt", "type": "main", "index": 0 }]]
+    "Qdrant Vector Store": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
     },
-    "Build Prompt": {
-      "main": [[{ "node": "LLM Chat", "type": "main", "index": 0 }]]
+    "Embeddings Ollama": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Qdrant Vector Store",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
     },
-    "LLM Chat": {
-      "main": [[{ "node": "Format Response", "type": "main", "index": 0 }]]
+    "Kubernetes Inventory Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {

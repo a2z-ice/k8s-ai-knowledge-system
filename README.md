@@ -6,18 +6,24 @@ A self-hosted Kubernetes AI Knowledge System that continuously indexes a live `k
 
 ```
 kind cluster (K8s API)
-  └─ k8s-watcher (Python)      watches 9 resource types
-       └─ Kafka (k8s-resources) CDC event stream
-            └─ n8n CDC Flow     embed → delete-by-uid → insert into Qdrant
+  └─ k8s-watcher (Python pod)   watches 10 resource types (incl. Secrets)
+       └─ Kafka (k8s-resources)  CDC event stream
+            └─ n8n CDC Flow      embed → delete-by-uid → insert into Qdrant
 
 User query (browser / curl)
-  └─ n8n AI Flow               embed query → Qdrant search → Ollama LLM → response
+  └─ n8n AI Flow                embed query → Qdrant search → Ollama LLM → response
+       └─ Postgres Chat Memory   n8n_chat_histories (last 5 message pairs, session-scoped)
 
 POST /webhook/k8s-reset
-  └─ n8n Reset Flow            DROP + RECREATE Qdrant collection → trigger full resync
+  └─ n8n Reset Flow             DROP + RECREATE Qdrant collection → trigger full resync
+
+Scheduled (hourly) / manual
+  └─ n8n Memory_Clear_Flow      DELETE FROM n8n_chat_histories
 ```
 
-**Stack:** kind · n8n · Qdrant · Kafka (KRaft) · Ollama · Docker Compose · Playwright
+**Stack:** kind · n8n · Qdrant · Kafka (KRaft) · Ollama · PostgreSQL · pgAdmin · Kubernetes · Playwright
+
+All services run as pods inside the `k8s-ai` namespace of a local kind cluster.
 
 ---
 
@@ -30,67 +36,81 @@ POST /webhook/k8s-reset
 | Docker Desktop | 4.x+ |
 | kind | 0.24+ |
 | kubectl | any |
-| Ollama | any (runs on host, not in Docker) |
+| Ollama | any (runs on host machine, not in a pod) |
 | Node.js | 18+ (for tests and screenshots) |
+| python3 | 3.8+ |
 
-### 1. Create kind cluster
-
-```bash
-kind create cluster --name k8s-ai
-```
-
-### 2. Pull Ollama models (host machine)
+### 1. Pull Ollama models (host machine, one-time)
 
 ```bash
-ollama pull nomic-embed-text   # 768-dim embedding model
-ollama pull qwen3:8b           # chat / reasoning model
+ollama pull nomic-embed-text   # 768-dim embedding model (~274 MB)
+ollama pull qwen3:8b           # chat / reasoning model (~5.2 GB)
 ```
 
-### 3. Start all Docker services
+### 2. Run the setup script
 
 ```bash
-docker compose -f docker-compose.yml up -d
+./scripts/setup.sh
 ```
 
-Services started: `n8n`, `qdrant`, `kafka`, `debezium`, `k8s-watcher`
+This single command handles everything end-to-end:
 
-> **Note:** Update `K8S_SERVER` in `docker-compose.yml` to match your kind cluster API port:
-> ```bash
-> kubectl --context kind-k8s-ai cluster-info | grep "control plane"
-> ```
+1. Verifies prerequisites
+2. Creates the kind cluster (`k8s-ai`) with `infra/kind-config.yaml` (NodePort mappings + data mounts)
+3. Deploys all 6 pods: Kafka, Qdrant, k8s-watcher, n8n, postgres, pgadmin
+4. Builds and loads the `k8s-watcher:latest` image into kind
+5. Creates the Qdrant `k8s` collection (768-dim Cosine)
+6. Injects the Kafka credential into the n8n SQLite database
+7. Imports and activates all 4 workflows
+8. Triggers an initial resync and waits for Qdrant to populate (≥ 10 points)
+9. Runs `npm test` — all 12 E2E tests must pass
 
-### 4. Create the Qdrant collection
+Expected completion time: ~4 minutes on a fast machine.
+
+```
+━━━ Running E2E test suite ━━━
+  ✓  1  CDC: create namespace → Kafka event published + Qdrant insertion       (2.9s)
+  ✓  2  CDC: update deployment → old vector replaced (dedup by resource_uid)   (2.0s)
+  ✓  3  CDC: delete resource → point removed from Qdrant vector store          (32ms)
+  ✓  4  AI: namespace count query → structured markdown table response          (3.4s)
+  ✓  6  CDC: create secret → Kafka event + Qdrant (safe metadata only)         (2.9s)
+  ✓  7  AI: secrets query → metadata returned, values never exposed            (1.1s)
+  ✓  8  AI Agent webhook: deployment query → grounded response via Qdrant tool (26.5s)
+  ✓  9  AI Agent webhook: namespace query → markdown table via Qdrant tool      (4.7s)
+  ✓ 10  AI Agent webhook: secrets query → names returned, values never exposed (16.4s)
+  ✓ 11  Memory: consecutive queries share session context (postgres-backed)    (31.4s)
+  ✓ 12  Memory: clear removes all chat history from n8n_chat_histories         (451ms)
+  ✓  5  Reset: POST /webhook/k8s-reset clears Qdrant and CDC resync repopulates (3.4s)
+
+  12 passed (1.8m)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Setup complete!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  n8n dashboard      : http://localhost:30000
+  AI chat            : http://localhost:30000/webhook/k8s-ai-chat/chat
+  Qdrant             : http://localhost:30001
+  k8s-watcher health : http://localhost:30002/healthz
+  pgAdmin            : http://localhost:30003  (admin@example.com / admin)
+  Postgres (direct)  : psql -h localhost -p 30004 -U n8n -d n8n_memory
+
+  Workflow IDs (static — embedded in JSON):
+    CDC    = k8sCDCflow00001
+    AI     = k8sAIflow000001
+    Reset  = k8sRSTflow00001
+    Memory = k8sMEMclear001
+```
+
+### Setup options
 
 ```bash
-curl -X PUT http://localhost:6333/collections/k8s \
-  -H 'Content-Type: application/json' \
-  -d @infra/schemas/qdrant_k8s_collection_schema.json
+./scripts/setup.sh                      # full from-scratch setup
+./scripts/setup.sh --keep-cluster       # reuse existing cluster; reimport workflows + run tests
+./scripts/setup.sh --no-test            # skip the final npm test run
+./scripts/cleanup.sh                    # delete cluster + watcher image (keeps ./data/)
+./scripts/cleanup.sh --wipe-data --yes  # full clean slate
 ```
-
-### 5. Import and activate n8n workflows
-
-Complete the n8n first-run owner setup at http://localhost:5678, then:
-
-```bash
-docker cp workflows/n8n_cdc_k8s_flow.json   kind_vector_n8n-n8n-1:/tmp/
-docker cp workflows/n8n_ai_k8s_flow.json    kind_vector_n8n-n8n-1:/tmp/
-docker cp workflows/n8n_reset_k8s_flow.json kind_vector_n8n-n8n-1:/tmp/
-docker exec kind_vector_n8n-n8n-1 n8n import:workflow --input=/tmp/n8n_cdc_k8s_flow.json
-docker exec kind_vector_n8n-n8n-1 n8n import:workflow --input=/tmp/n8n_ai_k8s_flow.json
-docker exec kind_vector_n8n-n8n-1 n8n import:workflow --input=/tmp/n8n_reset_k8s_flow.json
-```
-
-Get the assigned IDs, then activate:
-
-```bash
-docker exec kind_vector_n8n-n8n-1 n8n list:workflow
-docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=<CDC_ID>
-docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=<AI_ID>
-docker exec kind_vector_n8n-n8n-1 n8n publish:workflow --id=<RESET_ID>
-docker restart kind_vector_n8n-n8n-1
-```
-
-> **Known n8n 2.6.4 bug:** `N8N_BASIC_AUTH_ACTIVE=true` blocks all `POST /rest/*` calls. Always activate workflows via the CLI (`n8n publish:workflow`), not the browser UI toggle or REST API.
 
 ---
 
@@ -98,26 +118,53 @@ docker restart kind_vector_n8n-n8n-1
 
 ### AI Chat (public, no login required)
 
-Open: **http://localhost:5678/webhook/k8s-ai-chat/chat**
+Open: **http://localhost:30000/webhook/k8s-ai-chat/chat**
 
 Or via curl:
 ```bash
-curl -X POST http://localhost:5678/webhook/k8s-ai-chat/chat \
+curl -X POST http://localhost:30000/webhook/k8s-ai-chat/chat \
   -H 'Content-Type: application/json' \
   -d '{"chatInput": "Show me all deployments and their replica counts"}'
 ```
 
+### n8n Dashboard
+
+**http://localhost:30000** — sign in with `assaduzzaman.ict@gmail.com` / `admin@123Normal`
+
 ### Reset & Resync Vector Database
 
 ```bash
-curl -X POST http://localhost:5678/webhook/k8s-reset
-# Qdrant repopulates in ~30–60 s
+curl -X POST http://localhost:30000/webhook/k8s-reset \
+  -H 'Content-Type: application/json' -d '{}'
+# Qdrant repopulates in ~30–45 s
 ```
+
+### Chat Memory
+
+The AI Agent retains context across consecutive queries within the same session (`k8s-ai-global`). The last 5 message pairs are stored in PostgreSQL (`n8n_chat_histories` table).
+
+**Inspect the chat history:**
+```bash
+psql -h localhost -p 30004 -U n8n -d n8n_memory \
+  -c "SELECT session_id, message->>'type' AS type, left(message->>'data', 80) AS preview FROM n8n_chat_histories;"
+```
+
+**Clear chat history (runs automatically every hour via Memory_Clear_Flow):**
+```bash
+psql -h localhost -p 30004 -U n8n -d n8n_memory -c "DELETE FROM n8n_chat_histories;"
+```
+
+### pgAdmin — Postgres DB Browser
+
+Open **http://localhost:30003** — login `admin@example.com` / `admin`.
+
+The "k8s-ai Postgres" server is pre-configured. Navigate to **Databases → n8n_memory → Schemas → public → Tables → n8n_chat_histories** to inspect stored conversations.
 
 ### k8s-watcher Health Check
 
 ```bash
-curl http://localhost:8085/healthz
+curl http://localhost:30002/healthz
+# {"status":"ok"}
 ```
 
 ---
@@ -126,33 +173,25 @@ curl http://localhost:8085/healthz
 
 | Workflow | ID | Purpose |
 |----------|----|---------|
-| CDC_K8s_Flow | *(assigned at import)* | Kafka → embed → Qdrant upsert |
-| AI_K8s_Flow | *(assigned at import)* | Chat → embed → Qdrant search → LLM |
-| Reset_K8s_Flow | *(assigned at import)* | Clear Qdrant + trigger k8s-watcher resync |
+| CDC_K8s_Flow | `k8sCDCflow00001` | Kafka → embed → Qdrant upsert |
+| AI_K8s_Flow | `k8sAIflow000001` | Chat → embed → Qdrant search → LLM |
+| Reset_K8s_Flow | `k8sRSTflow00001` | Clear Qdrant + trigger k8s-watcher resync |
+| Memory_Clear_Flow | `k8sMEMclear001` | Hourly + manual DELETE FROM n8n_chat_histories |
+
+Workflow IDs are **static** — embedded in the JSON files. n8n 1.x+ uses the `id` field from the JSON on import. The `setup.sh` script handles deduplication by deleting existing rows (by name and ID) before re-importing.
 
 ---
 
 ## Running Tests
 
-Install dependencies first:
 ```bash
-npm install
-npx playwright install chromium
-```
-
-Run all 5 E2E tests (API mode — no browser required):
-```bash
-npm test
-```
-
-Run a single test:
-```bash
-npm run test:single "create namespace"
+npm test                                # all 12 E2E tests
+npm run test:single "create namespace"  # single test by name
 ```
 
 Capture UI screenshots:
 ```bash
-N8N_EMAIL=you@example.com N8N_PASS=yourpassword npm run screenshots
+N8N_EMAIL=assaduzzaman.ict@gmail.com N8N_PASS=admin@123Normal npm run screenshots
 ```
 
 ---
@@ -160,32 +199,40 @@ N8N_EMAIL=you@example.com N8N_PASS=yourpassword npm run screenshots
 ## Project Structure
 
 ```
-├── docker-compose.yml               # 5 Docker services
-├── CLAUDE.md                        # AI assistant guidance
-│
-├── workflows/                       # n8n workflow JSON files
-├── k8s-watcher/                     # Python K8s API watcher → Kafka
-├── infra/schemas/                   # Qdrant collection schema
-├── infra/connectors/                # Debezium connector (legacy reference)
-├── prompts/                         # LLM system prompt
-├── scripts/                         # Screenshot capture + n8n setup
-├── tests/e2e/                       # Playwright E2E test suite
+├── scripts/
+│   ├── setup.sh        # full bootstrap: cluster + pods + workflows + tests
+│   └── cleanup.sh      # tear down cluster and images (optionally wipes ./data/)
+├── workflows/          # n8n workflow JSON files (with static id fields)
+│   ├── n8n_ai_k8s_flow.json
+│   ├── n8n_cdc_k8s_flow.json
+│   ├── n8n_reset_k8s_flow.json
+│   └── n8n_memory_clear_flow.json
+├── k8s-watcher/        # Python K8s API watcher → Kafka
+├── infra/
+│   ├── kind-config.yaml          # kind cluster config (NodePorts + data mounts)
+│   ├── k8s/                      # Kubernetes manifests (kafka/, qdrant/, k8s-watcher/, n8n/, postgres/, pgadmin/)
+│   └── schemas/                  # Qdrant collection schema
+├── tests/e2e/          # Playwright E2E test suite (12 tests, API mode)
+├── prompts/            # LLM system prompt
 └── docs/
-    ├── manual-test.md               # Step-by-step manual test guide
-    ├── screenshots/                 # Auto-generated UI screenshots
-    ├── plans/                       # Implementation plans
-    └── specs/                       # Original specification docs
+    ├── manual-test.md  # Step-by-step manual test guide
+    ├── medium-article.md
+    ├── screenshots/    # Auto-generated UI screenshots
+    └── plans/          # Implementation plans
 ```
 
 ---
 
 ## Key Design Decisions
 
-- **k8s-watcher over Debezium** — watches the K8s API directly. The Debezium etcd connector approach is incorrect (etcd is not MongoDB).
-- **Qdrant score threshold 0.3** — `nomic-embed-text` on short k8s metadata produces scores in 0.38–0.70. The threshold of 0.3 ensures all resource types are returned; higher values silently exclude Deployments (~0.43).
+- **k8s-watcher over Debezium** — watches the K8s API directly (`config.load_incluster_config()`). The Debezium etcd connector approach is incorrect (etcd is not MongoDB).
+- **Qdrant score threshold 0.3** — `nomic-embed-text` on k8s metadata produces scores in 0.38–0.70. Threshold 0.3 ensures all resource types are returned; higher values silently exclude Deployments (~0.43).
 - **Natural-language embed text** — `"Kubernetes Deployment named coredns in namespace kube-system. Labels: ..."` gives significantly better cosine similarity than terse `kind:X name:Y` format.
 - **Kafka KRaft mode** — no ZooKeeper dependency.
-- **Ollama on host** — never inside Docker. All containers reach it via `host.docker.internal:11434`.
+- **Ollama on host** — never inside a pod. Pods reach it via `host.docker.internal:11434` (mapped to `192.168.1.154` via `hostAliases`).
+- **autoOffsetReset: latest** — CDC Kafka Trigger consumes only messages published after the workflow starts. `earliest` would replay the full topic history on every n8n restart, breaking the Reset E2E test.
+- **n8n SQLite safety** — direct sqlite3 writes only when n8n is scaled to 0 replicas. Concurrent writes cause `SQLITE_CORRUPT`.
+- **PostgreSQL chat memory** — `MemoryPostgresChat` node persists conversation history per session in the `n8n_chat_histories` table. Fixed session key `k8s-ai-global` (single-user assistant). `contextWindowLength: 5` keeps the last 5 message pairs as context. Auto-cleared every hour by `Memory_Clear_Flow`.
 
 ---
 
@@ -196,9 +243,9 @@ When using [Claude Code](https://claude.ai/code) in this repo, these project-spe
 | Command | Purpose |
 |---------|---------|
 | `/resume` | Session-start brief — system health + what's built + next steps |
-| `/status` | Full health check across all 9 components |
-| `/start-services` | Start Docker Compose + verify all components |
+| `/status` | Full health check across all components |
+| `/start-services` | Apply k8s manifests and verify all components are healthy |
 | `/reset-db` | Wipe Qdrant + trigger CDC resync |
-| `/reimport-workflows` | Reimport + reactivate all 3 n8n workflows |
-| `/test` | Run all 5 E2E tests with diagnostic output |
+| `/reimport-workflows` | Reimport + reactivate all 4 n8n workflows |
+| `/test` | Run all 12 E2E tests with diagnostic output |
 | `/screenshots` | Capture all UI screenshots |

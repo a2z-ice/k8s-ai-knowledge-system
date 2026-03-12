@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k8s-watcher
+  namespace: k8s-ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: k8s-watcher
+  template:
+    metadata:
+      labels:
+        app: k8s-watcher
+    spec:
+      serviceAccountName: k8s-watcher
+      containers:
+        - name: k8s-watcher
+          image: k8s-watcher:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:9092"
+            - name: KAFKA_TOPIC
+              value: "k8s-resources"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: k8s-watcher
+  namespace: k8s-ai
+spec:
+  selector:
+    app: k8s-watcher
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: k8s-watcher-nodeport
+  namespace: k8s-ai
+spec:
+  selector:
+    app: k8s-watcher
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30002
+  type: NodePort

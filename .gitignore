@@ -1,5 +1,6 @@
 # Docker bind-mount volumes (large runtime data — not committed)
 data/
+data-classic/
 
 # Node
 node_modules/
