@@ -30,6 +30,7 @@ A complete visual guide to setting up, operating, testing, and utilizing the Kub
 16. [Ollama Model Management](#16-ollama-model-management)
 17. [Common Operations & Maintenance](#17-common-operations--maintenance)
 18. [Troubleshooting](#18-troubleshooting)
+19. [Claude Code Skills (Slash Commands)](#19-claude-code-skills-slash-commands)
 
 ---
 
@@ -1260,6 +1261,140 @@ ollama serve &
 ./scripts/cleanup.sh --wipe-data --yes
 ./scripts/setup.sh
 ```
+
+---
+
+## 19. Claude Code Skills (Slash Commands)
+
+This project includes 7 custom slash commands (skills) for Claude Code that automate common operations. Skills are stored in `.claude/commands/` and invoked by typing `/<skill-name>` in the Claude Code CLI.
+
+### Overview
+
+| Command | Purpose | When to Use |
+|---------|---------|-------------|
+| `/resume` | Session-start brief with system state and next steps | Beginning of every new Claude Code session |
+| `/status` | Full health check of all 11 components | After Docker restart, suspected issues, or periodic monitoring |
+| `/start-services` | Apply k8s manifests and verify all pods are healthy | After cluster creation or pod failures |
+| `/reimport-workflows` | Reimport + reactivate all 4 n8n workflows from JSON | After editing workflow JSON files or fresh n8n pod |
+| `/reset-db` | Wipe Qdrant and trigger CDC resync via k8s-watcher | When Qdrant data is stale or tests need clean state |
+| `/test` | Run all 15 E2E tests with prerequisite checks | After code changes, workflow edits, or deployment |
+| `/screenshots` | Capture all UI screenshots to docs/screenshots/ | After UI changes or for documentation updates |
+
+### Skill Details
+
+#### `/resume` — Session Start Brief
+
+Reads project context and reports:
+- What phases are complete (from `docs/plans/`)
+- Current system state: pods (6), Qdrant points, workflow webhooks, Ollama models
+- Static workflow IDs for quick reference
+- Quick commands for common operations
+- Suggested next steps from the plans
+
+**Best practice:** Run this at the start of every Claude Code session to orient yourself.
+
+#### `/status` — Full Health Check
+
+Checks all 11 components in parallel:
+
+| Check | Method | Expected |
+|-------|--------|----------|
+| k8s pods (6) | `kubectl get pods` | All Running |
+| Qdrant | `curl localhost:30001/collections/k8s` | points_count > 0, status green |
+| Kafka | `kafka-get-offsets` via kubectl exec | Topic offset present |
+| k8s-watcher | `curl localhost:30002/healthz` | `{"status":"ok"}` |
+| Ollama | `curl localhost:11434/api/tags` | nomic-embed-text + qwen3:14b-k8s |
+| kind cluster | `kubectl get nodes` | Ready |
+| n8n AI webhook | `curl localhost:30000/webhook/k8s-ai-chat/chat` | HTTP 200 |
+| n8n Reset webhook | `POST localhost:30000/webhook/k8s-reset` | HTTP 200 |
+| Postgres | `psql -h localhost -p 30004` | Connection OK |
+| pgAdmin | `curl localhost:30003` | HTTP 200 |
+
+Includes auto-remediation hints for each failure mode.
+
+#### `/start-services` — Deploy & Verify
+
+Applies manifests in dependency order:
+1. Namespace → PVs → Kafka → Qdrant → k8s-watcher → n8n
+2. Waits 30s for initialization
+3. Verifies each service endpoint
+4. Creates Qdrant collection if missing
+5. Checks Ollama models (pulls if missing, builds qwen3:14b-k8s if needed)
+6. Verifies workflow webhooks
+7. Triggers initial Qdrant sync if empty
+
+#### `/reimport-workflows` — Workflow Import
+
+Handles the full workflow reimport lifecycle:
+1. Scales n8n to 0 replicas (sqlite safety)
+2. Deletes existing workflow rows by static ID
+3. Scales n8n back to 1
+4. Copies 4 JSON files into the n8n pod
+5. Imports via `n8n import:workflow`
+6. Publishes (activates) via `n8n publish:workflow`
+7. Restarts n8n for webhook registration
+8. Verifies webhooks return HTTP 200
+
+**Static workflow IDs:**
+- CDC: `k8sCDCflow00001`
+- AI Agent: `k8sAIflow000001`
+- Reset: `k8sRSTflow00001`
+- Memory Clear: `k8sMEMclear001`
+
+> **Tip:** For most cases, `./scripts/setup.sh --keep-cluster --no-test` is simpler — it handles everything automatically.
+
+#### `/reset-db` — Qdrant Reset
+
+1. Records current point count (before)
+2. Calls `POST /webhook/k8s-reset` which:
+   - Deletes the `k8s` collection
+   - Recreates it (768-dim Cosine)
+   - Triggers k8s-watcher `/resync` (async)
+3. Polls Qdrant every 5s until ≥ 25 points
+4. Reports before/after counts
+
+**Important:** After reset, Qdrant is empty for ~30–45 seconds while k8s-watcher republishes all resources. Do not run tests until repopulation is complete.
+
+#### `/test` — E2E Test Suite
+
+Runs all 15 Playwright API-mode tests with prerequisite verification:
+
+**Prerequisites checked:**
+- All 6 pods Running
+- Qdrant has ≥ 10 points
+- Ollama has nomic-embed-text + qwen3:14b-k8s
+- kind cluster reachable
+
+**Test categories:**
+| Tests | Category | Dependencies |
+|-------|----------|-------------|
+| 1–4 | CDC simulation (direct Qdrant upsert) | Qdrant only |
+| 6–7 | Additional CDC tests | Qdrant only |
+| 8–10 | Multi-tool AI Agent pipeline | n8n AI webhook + Ollama + Qdrant |
+| 13–15 | Accuracy (AI vs kubectl comparison) | n8n AI webhook + Ollama + kubectl |
+| 5 | Reset (declared last in spec) | n8n Reset webhook |
+
+**Single test:** `npm run test:single "test name"`
+
+#### `/screenshots` — UI Capture
+
+Captures all UI screenshots using Playwright:
+1. Verifies n8n health and all 6 pods
+2. Runs `npm run screenshots`
+3. Saves to `docs/screenshots/`
+4. Lists captured files and flags missing ones
+
+Expected output: 15 PNG files covering sign-in, dashboard, workflow canvases, executions, chat interface, and settings.
+
+### Adding New Skills
+
+Create a new `.md` file in `.claude/commands/`:
+```bash
+# Example: .claude/commands/my-skill.md
+echo "Description of what the skill does and step-by-step instructions..." > .claude/commands/my-skill.md
+```
+
+The skill becomes available as `/my-skill` in Claude Code immediately. Skills are markdown files containing instructions that Claude Code follows when the command is invoked.
 
 ---
 

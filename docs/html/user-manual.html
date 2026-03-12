@@ -135,6 +135,10 @@
   <a href="#watcher-secrets">&nbsp;&nbsp;Secret Safety</a>
   <a href="#ops" class="section-head">18. Operations</a>
   <a href="#troubleshooting" class="section-head">19. Troubleshooting</a>
+  <a href="#skills" class="section-head">20. Claude Code Skills</a>
+  <a href="#skills-overview">&nbsp;&nbsp;Overview</a>
+  <a href="#skills-details">&nbsp;&nbsp;Skill Details</a>
+  <a href="#skills-new">&nbsp;&nbsp;Adding New Skills</a>
   <a href="../ollama-model-customization-guide.md" style="margin-top:20px;border-top:1px solid var(--border);padding-top:12px;">Model Guide (MD)</a>
   <a href="index.html">Model Guide (HTML)</a>
 </nav>
@@ -1157,6 +1161,181 @@ kubectl --context kind-k8s-ai -n k8s-ai logs -f kafka-0</code></pre>
   <tr><td>Pods not starting</td><td>Manifests not applied</td><td><code>kubectl apply -f infra/k8s/</code></td></tr>
   <tr><td>k8s-watcher CrashLoopBackOff</td><td>Image not loaded into kind</td><td><code>kind load docker-image k8s-watcher:latest --name k8s-ai</code></td></tr>
 </table>
+</section>
+
+<!-- Section 20: Claude Code Skills -->
+<section id="skills">
+<h2><span class="num">20</span> Claude Code Skills (Slash Commands)</h2>
+
+<p>This project includes <strong>7 custom slash commands</strong> (skills) for Claude Code that automate common operations. Skills are stored in <code>.claude/commands/</code> and invoked by typing <code>/&lt;skill-name&gt;</code> in the Claude Code CLI.</p>
+
+<div id="skills-overview">
+<h3>Overview</h3>
+<table>
+<tr><th>Command</th><th>Purpose</th><th>When to Use</th></tr>
+<tr><td><code>/resume</code></td><td>Session-start brief with system state and next steps</td><td>Beginning of every new Claude Code session</td></tr>
+<tr><td><code>/status</code></td><td>Full health check of all 11 components</td><td>After Docker restart, suspected issues, or periodic monitoring</td></tr>
+<tr><td><code>/start-services</code></td><td>Apply k8s manifests and verify all pods are healthy</td><td>After cluster creation or pod failures</td></tr>
+<tr><td><code>/reimport-workflows</code></td><td>Reimport + reactivate all 4 n8n workflows from JSON</td><td>After editing workflow JSON files or fresh n8n pod</td></tr>
+<tr><td><code>/reset-db</code></td><td>Wipe Qdrant and trigger CDC resync via k8s-watcher</td><td>When Qdrant data is stale or tests need clean state</td></tr>
+<tr><td><code>/test</code></td><td>Run all 15 E2E tests with prerequisite checks</td><td>After code changes, workflow edits, or deployment</td></tr>
+<tr><td><code>/screenshots</code></td><td>Capture all UI screenshots to docs/screenshots/</td><td>After UI changes or for documentation updates</td></tr>
+</table>
+</div>
+
+<div id="skills-details">
+<h3>Skill Details</h3>
+
+<!-- /resume -->
+<div class="node-card" style="border-left-color:#4ecdc4;">
+<h4><code>/resume</code> — Session Start Brief</h4>
+<p>Reads project context and reports:</p>
+<ul>
+<li>What phases are complete (from <code>docs/plans/</code>)</li>
+<li>Current system state: pods (6), Qdrant points, workflow webhooks, Ollama models</li>
+<li>Static workflow IDs for quick reference</li>
+<li>Quick commands for common operations</li>
+<li>Suggested next steps from the plans</li>
+</ul>
+<div class="callout" style="border-left-color:#4ecdc4;background:rgba(78,205,196,0.1);">
+<strong>Best Practice:</strong> Run this at the start of every Claude Code session to orient yourself and get the full picture.
+</div>
+</div>
+
+<!-- /status -->
+<div class="node-card" style="border-left-color:#45b7d1;">
+<h4><code>/status</code> — Full Health Check</h4>
+<p>Checks all 11 components in parallel and produces a status table:</p>
+<table>
+<tr><th>Check</th><th>Method</th><th>Expected</th></tr>
+<tr><td>k8s pods (6)</td><td><code>kubectl get pods</code></td><td>All Running</td></tr>
+<tr><td>Qdrant</td><td><code>curl localhost:30001/collections/k8s</code></td><td>points_count &gt; 0, status green</td></tr>
+<tr><td>Kafka</td><td><code>kafka-get-offsets</code> via kubectl exec</td><td>Topic offset present</td></tr>
+<tr><td>k8s-watcher</td><td><code>curl localhost:30002/healthz</code></td><td><code>{"status":"ok"}</code></td></tr>
+<tr><td>Ollama</td><td><code>curl localhost:11434/api/tags</code></td><td>nomic-embed-text + qwen3:14b-k8s</td></tr>
+<tr><td>kind cluster</td><td><code>kubectl get nodes</code></td><td>Ready</td></tr>
+<tr><td>n8n AI webhook</td><td><code>curl localhost:30000/webhook/k8s-ai-chat/chat</code></td><td>HTTP 200</td></tr>
+<tr><td>n8n Reset webhook</td><td><code>POST localhost:30000/webhook/k8s-reset</code></td><td>HTTP 200</td></tr>
+<tr><td>Postgres</td><td><code>psql -h localhost -p 30004</code></td><td>Connection OK</td></tr>
+<tr><td>pgAdmin</td><td><code>curl localhost:30003</code></td><td>HTTP 200</td></tr>
+</table>
+<p>Includes auto-remediation hints for each failure mode.</p>
+</div>
+
+<!-- /start-services -->
+<div class="node-card" style="border-left-color:#f7dc6f;">
+<h4><code>/start-services</code> — Deploy &amp; Verify</h4>
+<p>Applies manifests in dependency order:</p>
+<ol>
+<li>Namespace → PVs → Kafka → Qdrant → k8s-watcher → n8n</li>
+<li>Waits 30s for initialization</li>
+<li>Verifies each service endpoint</li>
+<li>Creates Qdrant collection if missing</li>
+<li>Checks Ollama models (pulls if missing, builds <code>qwen3:14b-k8s</code> if needed)</li>
+<li>Verifies workflow webhooks</li>
+<li>Triggers initial Qdrant sync if empty</li>
+</ol>
+</div>
+
+<!-- /reimport-workflows -->
+<div class="node-card" style="border-left-color:#e74c3c;">
+<h4><code>/reimport-workflows</code> — Workflow Import</h4>
+<p>Handles the full workflow reimport lifecycle:</p>
+<ol>
+<li>Scales n8n to 0 replicas (sqlite safety)</li>
+<li>Deletes existing workflow rows by static ID</li>
+<li>Scales n8n back to 1</li>
+<li>Copies 4 JSON files into the n8n pod</li>
+<li>Imports via <code>n8n import:workflow</code></li>
+<li>Publishes (activates) via <code>n8n publish:workflow</code></li>
+<li>Restarts n8n for webhook registration</li>
+<li>Verifies webhooks return HTTP 200</li>
+</ol>
+<table>
+<tr><th>Workflow</th><th>Static ID</th></tr>
+<tr><td>CDC_K8s_Flow</td><td><code>k8sCDCflow00001</code></td></tr>
+<tr><td>AI_K8s_Flow</td><td><code>k8sAIflow000001</code></td></tr>
+<tr><td>Reset_K8s_Flow</td><td><code>k8sRSTflow00001</code></td></tr>
+<tr><td>Memory_Clear_Flow</td><td><code>k8sMEMclear001</code></td></tr>
+</table>
+<div class="callout" style="border-left-color:#e74c3c;background:rgba(231,76,60,0.1);">
+<strong>Tip:</strong> For most cases, <code>./scripts/setup.sh --keep-cluster --no-test</code> is simpler — it handles everything automatically.
+</div>
+</div>
+
+<!-- /reset-db -->
+<div class="node-card" style="border-left-color:#9b59b6;">
+<h4><code>/reset-db</code> — Qdrant Reset</h4>
+<ol>
+<li>Records current point count (before)</li>
+<li>Calls <code>POST /webhook/k8s-reset</code> which:
+  <ul>
+  <li>Deletes the <code>k8s</code> collection</li>
+  <li>Recreates it (768-dim Cosine)</li>
+  <li>Triggers k8s-watcher <code>/resync</code> (async)</li>
+  </ul>
+</li>
+<li>Polls Qdrant every 5s until ≥ 25 points</li>
+<li>Reports before/after counts</li>
+</ol>
+<div class="callout" style="border-left-color:#9b59b6;background:rgba(155,89,182,0.1);">
+<strong>Important:</strong> After reset, Qdrant is empty for ~30–45 seconds while k8s-watcher republishes all resources. Do not run tests until repopulation is complete.
+</div>
+</div>
+
+<!-- /test -->
+<div class="node-card" style="border-left-color:#2ecc71;">
+<h4><code>/test</code> — E2E Test Suite</h4>
+<p>Runs all <strong>15 Playwright API-mode tests</strong> with prerequisite verification.</p>
+<p><strong>Prerequisites checked:</strong></p>
+<ul>
+<li>All 6 pods Running</li>
+<li>Qdrant has ≥ 10 points</li>
+<li>Ollama has nomic-embed-text + qwen3:14b-k8s</li>
+<li>kind cluster reachable</li>
+</ul>
+<table>
+<tr><th>Tests</th><th>Category</th><th>Dependencies</th></tr>
+<tr><td>1–4</td><td>CDC simulation (direct Qdrant upsert)</td><td>Qdrant only</td></tr>
+<tr><td>6–7</td><td>Additional CDC tests</td><td>Qdrant only</td></tr>
+<tr><td>8–10</td><td>Multi-tool AI Agent pipeline</td><td>n8n AI webhook + Ollama + Qdrant</td></tr>
+<tr><td>13–15</td><td>Accuracy (AI vs kubectl)</td><td>n8n AI webhook + Ollama + kubectl</td></tr>
+<tr><td>5</td><td>Reset (declared last in spec)</td><td>n8n Reset webhook</td></tr>
+</table>
+<p><strong>Single test:</strong> <code>npm run test:single "test name"</code></p>
+</div>
+
+<!-- /screenshots -->
+<div class="node-card" style="border-left-color:#f39c12;">
+<h4><code>/screenshots</code> — UI Capture</h4>
+<p>Captures all UI screenshots using Playwright:</p>
+<ol>
+<li>Verifies n8n health and all 6 pods</li>
+<li>Runs <code>npm run screenshots</code></li>
+<li>Saves to <code>docs/screenshots/</code></li>
+<li>Lists captured files and flags missing ones</li>
+</ol>
+<p>Expected output: <strong>15 PNG files</strong> covering sign-in, dashboard, workflow canvases, executions, chat interface, and settings.</p>
+</div>
+
+</div>
+
+<div id="skills-new">
+<h3>Adding New Skills</h3>
+<p>Create a new <code>.md</code> file in <code>.claude/commands/</code>:</p>
+<pre><code># Example: .claude/commands/my-skill.md
+# Write step-by-step instructions as markdown.
+# The skill becomes available as /my-skill immediately.
+
+My Skill Description
+
+**Steps:**
+1. First step with code blocks...
+2. Second step...
+</code></pre>
+<p>Skills are markdown files containing instructions that Claude Code follows when the command is invoked. No configuration or registration is needed — just drop the file and use <code>/my-skill</code>.</p>
+</div>
+
 </section>
 
 </main>
