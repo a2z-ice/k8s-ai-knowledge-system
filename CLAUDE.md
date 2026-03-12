@@ -12,8 +12,8 @@ Project-specific slash commands are in `.claude/commands/`. Use them to quickly 
 | `/status` | Full health check — k8s pods, Qdrant, Kafka, k8s-watcher, Ollama, kind, n8n workflows, webhooks |
 | `/start-services` | Apply k8s manifests and verify all components are healthy |
 | `/reset-db` | Wipe Qdrant vector DB and trigger CDC resync via `/webhook/k8s-reset` |
-| `/reimport-workflows` | Reimport + reactivate all 4 n8n workflows from local JSON files |
-| `/test` | Run all 12 E2E tests (`npm test`) with prerequisite checks and failure diagnosis |
+| `/reimport-workflows` | Reimport + reactivate all n8n workflows from local JSON files |
+| `/test` | Run all 15 E2E tests (`npm test`) with prerequisite checks and failure diagnosis |
 | `/screenshots` | Capture all UI screenshots (`npm run screenshots`) and list output |
 
 ---
@@ -50,7 +50,9 @@ kind_vector_n8n/
 ├── workflows/
 │   ├── n8n_ai_k8s_flow.json         # AI query pipeline workflow
 │   ├── n8n_cdc_k8s_flow.json        # CDC sync pipeline workflow
-│   └── n8n_reset_k8s_flow.json      # Reset: wipe Qdrant + trigger CDC resync
+│   ├── n8n_reset_k8s_flow.json      # Reset: wipe Qdrant + trigger CDC resync
+│   ├── n8n_memory_clear_flow.json   # Hourly + manual: DELETE FROM n8n_chat_histories
+│   └── n8n_qdrant_tool_flow.json    # Qdrant tool sub-workflow
 │
 ├── infra/
 │   ├── kind-config.yaml             # kind cluster config (extraPortMappings + extraMounts)
@@ -58,11 +60,13 @@ kind_vector_n8n/
 │   ├── connectors/debezium_k8s_connector.json  # kept for reference only (approach abandoned)
 │   └── k8s/                         # Kubernetes manifests
 │       ├── 00-namespace.yaml
-│       ├── 01-pvs.yaml              # 3 hostPath PVs (n8n, qdrant, kafka)
+│       ├── 01-pvs.yaml              # hostPath PVs (n8n, qdrant, kafka, postgres)
 │       ├── kafka/                   # kafka-pvc, kafka-service, kafka-statefulset
 │       ├── qdrant/                  # qdrant-pvc, qdrant-deployment, qdrant-service
 │       ├── k8s-watcher/             # k8s-watcher-rbac, k8s-watcher-deployment
-│       └── n8n/                     # n8n-pvc, n8n-deployment, n8n-service
+│       ├── n8n/                     # n8n-pvc, n8n-deployment, n8n-service
+│       ├── postgres/                # postgres-pvc, postgres-deployment, postgres-service
+│       └── pgadmin/                 # pgadmin-deployment, pgadmin-service
 │
 ├── k8s-watcher/                     # Python service: K8s API → Kafka publisher
 │   ├── watcher.py
@@ -136,6 +140,8 @@ kubectl --context kind-k8s-ai apply -f infra/k8s/kafka/
 kubectl --context kind-k8s-ai apply -f infra/k8s/qdrant/
 kubectl --context kind-k8s-ai apply -f infra/k8s/k8s-watcher/
 kubectl --context kind-k8s-ai apply -f infra/k8s/n8n/
+kubectl --context kind-k8s-ai apply -f infra/k8s/postgres/
+kubectl --context kind-k8s-ai apply -f infra/k8s/pgadmin/
 ```
 
 ### Install test dependencies (first time only)
@@ -146,7 +152,7 @@ npx playwright install chromium
 
 ### Run E2E tests
 ```bash
-npm test                           # all 10 tests
+npm test                           # all 15 tests
 npm run test:single "create namespace"   # single test by name
 ```
 
@@ -180,7 +186,7 @@ kind load docker-image k8s-watcher:latest --name k8s-ai
 ### Pull Ollama models (host machine only)
 ```bash
 ollama pull nomic-embed-text      # 768-dim embedding model
-ollama pull qwen3:8b              # chat/reasoning model
+ollama pull qwen3:14b-k8s        # chat/reasoning model (custom Modelfile)
 ```
 
 ---
@@ -220,6 +226,13 @@ POST /webhook/k8s-reset
   → PUT http://qdrant:6333/collections/k8s   (recreate 768-dim Cosine collection)
   → POST http://k8s-watcher:8080/resync       (async: lists all resources, publishes ADDED events)
   → Format Response {status, message, reset_at}
+```
+
+### Memory Clear Flow (chat history cleanup)
+```
+Schedule Trigger (every hour) OR Manual Trigger
+  → DELETE FROM n8n_chat_histories (Postgres)
+  → Format Response {status, cleared_at}
 ```
 
 k8s-watcher watches 10 resource types: Namespace, Pod, Service, ConfigMap, PVC, Secret, Deployment, ReplicaSet, StatefulSet, DaemonSet. Each runs in its own thread with auto-restart on error. For Secrets, only safe metadata is stored (`type` and `dataKeys` list) — base64-encoded values are never published to Kafka or Qdrant.

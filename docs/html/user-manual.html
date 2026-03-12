@@ -1,0 +1,1183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>User Manual — Kubernetes AI Knowledge System</title>
+<style>
+  :root {
+    --bg: #0d1117; --bg2: #161b22; --bg3: #21262d; --border: #30363d;
+    --text: #e6edf3; --text-dim: #8b949e; --accent: #58a6ff;
+    --accent2: #3fb950; --accent3: #d2a8ff; --accent4: #f0883e;
+    --danger: #f85149; --warn: #d29922;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background:var(--bg); color:var(--text); line-height:1.7; }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+
+  /* Navigation */
+  nav { position:fixed; top:0; left:0; width:260px; height:100vh; background:var(--bg2); border-right:1px solid var(--border); overflow-y:auto; padding:20px 16px; z-index:100; }
+  nav .nav-title { font-size:1.1em; font-weight:700; color:var(--accent); margin-bottom:16px; padding-bottom:8px; border-bottom:1px solid var(--border); }
+  nav a { display:block; padding:4px 8px; font-size:0.82em; color:var(--text-dim); border-radius:4px; margin-bottom:2px; }
+  nav a:hover { background:var(--bg3); color:var(--text); text-decoration:none; }
+  nav a.section-head { font-weight:600; color:var(--text); margin-top:10px; }
+  nav a.active { background:var(--accent); color:#000; }
+
+  /* Main */
+  main { margin-left:260px; padding:40px 60px 80px; max-width:1100px; }
+  h1 { font-size:2.4em; margin-bottom:8px; color:var(--accent); }
+  h2 { font-size:1.8em; margin:50px 0 20px; padding-bottom:10px; border-bottom:2px solid var(--border); color:var(--text); }
+  h2 .num { color:var(--accent); font-size:0.6em; vertical-align:super; margin-right:6px; }
+  h3 { font-size:1.3em; margin:30px 0 12px; color:var(--accent3); }
+  h4 { font-size:1.1em; margin:20px 0 8px; color:var(--accent4); }
+  p { margin-bottom:14px; }
+  ul, ol { margin:0 0 14px 24px; }
+  li { margin-bottom:6px; }
+  code { background:var(--bg3); padding:2px 6px; border-radius:3px; font-size:0.9em; font-family:'SF Mono',Monaco,monospace; }
+  pre { background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:16px 20px; overflow-x:auto; margin:14px 0; font-size:0.85em; line-height:1.6; }
+  pre code { background:none; padding:0; }
+  img { max-width:100%; border-radius:8px; border:1px solid var(--border); margin:12px 0; box-shadow:0 4px 20px rgba(0,0,0,0.4); }
+  table { width:100%; border-collapse:collapse; margin:14px 0; font-size:0.9em; }
+  th { background:var(--bg3); padding:10px 14px; text-align:left; border-bottom:2px solid var(--border); font-weight:600; }
+  td { padding:8px 14px; border-bottom:1px solid var(--border); }
+  tr:hover { background:var(--bg2); }
+
+  /* Cards */
+  .card { background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:20px 24px; margin:16px 0; }
+  .card h4 { margin-top:0; color:var(--accent); }
+
+  /* Credential box */
+  .cred-box { background:var(--bg2); border:1px solid var(--accent4); border-radius:10px; padding:20px 24px; margin:16px 0; }
+  .cred-box h4 { margin-top:0; color:var(--accent4); }
+
+  /* Callout */
+  .callout { border-radius:8px; padding:16px 20px; margin:16px 0; }
+  .callout.info { background:rgba(88,166,255,0.08); border-left:4px solid var(--accent); }
+  .callout.warn { background:rgba(210,168,34,0.08); border-left:4px solid var(--warn); }
+  .callout.danger { background:rgba(248,81,73,0.08); border-left:4px solid var(--danger); }
+  .callout.success { background:rgba(63,185,80,0.08); border-left:4px solid var(--accent2); }
+  .callout-title { font-weight:700; margin-bottom:6px; }
+
+  /* Node card */
+  .node-card { background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:20px 24px; margin:16px 0; border-left:4px solid var(--accent3); }
+  .node-card.trigger { border-left-color:var(--accent2); }
+  .node-card.code { border-left-color:var(--accent4); }
+  .node-card.http { border-left-color:var(--accent); }
+  .node-card.ai { border-left-color:var(--accent3); }
+  .node-card .node-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+  .node-card .node-name { font-weight:700; font-size:1.1em; }
+  .node-card .node-type { font-size:0.8em; color:var(--text-dim); background:var(--bg3); padding:2px 8px; border-radius:4px; }
+  .node-card .node-purpose { color:var(--text-dim); margin-bottom:10px; font-style:italic; }
+
+  /* Flow diagram */
+  .flow-diagram { background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:24px; margin:20px 0; font-family:'SF Mono',Monaco,monospace; font-size:0.85em; line-height:1.8; overflow-x:auto; }
+  .flow-arrow { color:var(--accent); }
+  .flow-node { color:var(--accent3); font-weight:600; }
+  .flow-tool { color:var(--accent4); }
+  .flow-condition { color:var(--warn); }
+  .flow-data { color:var(--accent2); }
+
+  /* Screenshot figure */
+  .screenshot { text-align:center; margin:20px 0; }
+  .screenshot figcaption { font-size:0.85em; color:var(--text-dim); margin-top:6px; }
+
+  /* Grid */
+  .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; }
+
+  /* Badge */
+  .badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:0.75em; font-weight:600; }
+  .badge.green { background:rgba(63,185,80,0.2); color:var(--accent2); }
+  .badge.blue { background:rgba(88,166,255,0.2); color:var(--accent); }
+  .badge.orange { background:rgba(240,136,62,0.2); color:var(--accent4); }
+  .badge.purple { background:rgba(210,168,255,0.2); color:var(--accent3); }
+
+  /* Responsive */
+  @media (max-width:900px) {
+    nav { display:none; }
+    main { margin-left:0; padding:20px; }
+    .grid-2, .grid-3 { grid-template-columns:1fr; }
+  }
+
+  /* Footer */
+  footer { margin-left:260px; padding:30px 60px; border-top:1px solid var(--border); color:var(--text-dim); font-size:0.85em; }
+</style>
+</head>
+<body>
+
+<!-- Navigation -->
+<nav>
+  <div class="nav-title">User Manual</div>
+  <a href="#urls" class="section-head">1. URLs & Credentials</a>
+  <a href="#architecture" class="section-head">2. Architecture</a>
+  <a href="#setup" class="section-head">3. Setup</a>
+  <a href="#health" class="section-head">4. System Health</a>
+  <a href="#signin" class="section-head">5. n8n Sign-In</a>
+  <a href="#cdc-flow" class="section-head">6. CDC Flow</a>
+  <a href="#cdc-nodes">&nbsp;&nbsp;Node-by-Node</a>
+  <a href="#ai-flow" class="section-head">7. AI Agent Flow</a>
+  <a href="#ai-nodes">&nbsp;&nbsp;Node-by-Node</a>
+  <a href="#ai-tools">&nbsp;&nbsp;Tool Selection</a>
+  <a href="#reset-flow" class="section-head">8. Reset Flow</a>
+  <a href="#reset-nodes">&nbsp;&nbsp;Node-by-Node</a>
+  <a href="#memory-flow" class="section-head">9. Memory Clear</a>
+  <a href="#chat" class="section-head">10. AI Chat</a>
+  <a href="#chat-examples">&nbsp;&nbsp;Query Examples</a>
+  <a href="#memory" class="section-head">11. Chat Memory</a>
+  <a href="#qdrant" class="section-head">12. Qdrant DB</a>
+  <a href="#pgadmin" class="section-head">13. pgAdmin</a>
+  <a href="#tests" class="section-head">14. E2E Tests</a>
+  <a href="#api" class="section-head">15. API Reference</a>
+  <a href="#ollama" class="section-head">16. Ollama Models</a>
+  <a href="#watcher" class="section-head">17. k8s-watcher</a>
+  <a href="#watcher-resources">&nbsp;&nbsp;Resource Types</a>
+  <a href="#watcher-secrets">&nbsp;&nbsp;Secret Safety</a>
+  <a href="#ops" class="section-head">18. Operations</a>
+  <a href="#troubleshooting" class="section-head">19. Troubleshooting</a>
+  <a href="../ollama-model-customization-guide.md" style="margin-top:20px;border-top:1px solid var(--border);padding-top:12px;">Model Guide (MD)</a>
+  <a href="index.html">Model Guide (HTML)</a>
+</nav>
+
+<!-- Main Content -->
+<main>
+
+<h1>Kubernetes AI Knowledge System</h1>
+<p style="color:var(--text-dim);font-size:1.1em;margin-bottom:30px;">Complete User Manual &mdash; Setup, Operation, Testing & Utilization Encyclopedia</p>
+
+<div class="callout info">
+  <div class="callout-title">About This System</div>
+  <p>A self-hosted AI assistant that continuously indexes a live Kubernetes cluster into a Qdrant vector database via Change Data Capture, and exposes a natural-language query interface through n8n and Ollama &mdash; entirely local, no cloud APIs required.</p>
+</div>
+
+<!-- Section 1: URLs & Credentials -->
+<section id="urls">
+<h2><span class="num">01</span> Quick Reference: URLs & Credentials</h2>
+
+<div class="cred-box">
+  <h4>Service URLs</h4>
+  <table>
+    <tr><th>Service</th><th>URL</th><th>Auth</th></tr>
+    <tr><td><strong>n8n Dashboard</strong></td><td><a href="http://localhost:30000">http://localhost:30000</a></td><td>Email + Password</td></tr>
+    <tr><td><strong>AI Chat</strong> (public)</td><td><a href="http://localhost:30000/webhook/k8s-ai-chat/chat">http://localhost:30000/webhook/k8s-ai-chat/chat</a></td><td>None</td></tr>
+    <tr><td><strong>Qdrant Dashboard</strong></td><td><a href="http://localhost:30001/dashboard">http://localhost:30001/dashboard</a></td><td>None</td></tr>
+    <tr><td><strong>k8s-watcher Health</strong></td><td><a href="http://localhost:30002/healthz">http://localhost:30002/healthz</a></td><td>None</td></tr>
+    <tr><td><strong>pgAdmin</strong></td><td><a href="http://localhost:30003">http://localhost:30003</a></td><td>Email + Password</td></tr>
+    <tr><td><strong>Postgres</strong> (direct)</td><td><code>psql -h localhost -p 30004 -U n8n -d n8n_memory</code></td><td>Password</td></tr>
+    <tr><td><strong>Reset Webhook</strong></td><td>POST <code>http://localhost:30000/webhook/k8s-reset</code></td><td>None</td></tr>
+    <tr><td><strong>Ollama</strong> (host)</td><td><a href="http://localhost:11434">http://localhost:11434</a></td><td>None</td></tr>
+  </table>
+</div>
+
+<div class="cred-box">
+  <h4>Credentials</h4>
+  <table>
+    <tr><th>Service</th><th>Username / Email</th><th>Password</th></tr>
+    <tr><td>n8n Dashboard</td><td><code>assaduzzaman.ict@gmail.com</code></td><td><code>********</code></td></tr>
+    <tr><td>n8n HTTP Basic Auth</td><td><code>admin</code></td><td><code>admin</code></td></tr>
+    <tr><td>pgAdmin</td><td><code>admin@example.com</code></td><td><code>admin</code></td></tr>
+    <tr><td>Postgres</td><td><code>n8n</code></td><td><code>n8n_memory</code></td></tr>
+  </table>
+</div>
+
+<div class="cred-box">
+  <h4>Workflow IDs (Static &mdash; Embedded in JSON)</h4>
+  <table>
+    <tr><th>Workflow</th><th>ID</th><th>Purpose</th></tr>
+    <tr><td>CDC_K8s_Flow</td><td><code>k8sCDCflow00001</code></td><td>Kafka &rarr; embed &rarr; Qdrant upsert</td></tr>
+    <tr><td>AI_K8s_Flow</td><td><code>k8sAIflow000001</code></td><td>Chat &rarr; AI Agent &rarr; tools &rarr; response</td></tr>
+    <tr><td>Reset_K8s_Flow</td><td><code>k8sRSTflow00001</code></td><td>Wipe Qdrant + trigger resync</td></tr>
+    <tr><td>Memory_Clear_Flow</td><td><code>k8sMEMclear001</code></td><td>Hourly DELETE from chat history</td></tr>
+  </table>
+</div>
+
+<div class="cred-box">
+  <h4>Kubernetes Context</h4>
+  <table>
+    <tr><th>Item</th><th>Value</th></tr>
+    <tr><td>Cluster name</td><td><code>k8s-ai</code></td></tr>
+    <tr><td>kubectl context</td><td><code>kind-k8s-ai</code></td></tr>
+    <tr><td>Namespace</td><td><code>k8s-ai</code></td></tr>
+    <tr><td>Kafka topic</td><td><code>k8s-resources</code></td></tr>
+    <tr><td>Kafka consumer group</td><td><code>n8n-cdc-consumer</code></td></tr>
+    <tr><td>Qdrant collection</td><td><code>k8s</code></td></tr>
+    <tr><td>Embedding model</td><td><code>nomic-embed-text:latest</code> (768-dim)</td></tr>
+    <tr><td>Chat model</td><td><code>qwen3:14b-k8s</code> (custom)</td></tr>
+  </table>
+</div>
+
+<div class="cred-box">
+  <h4>NodePort Assignments</h4>
+  <table>
+    <tr><th>Port</th><th>Service</th><th>Protocol</th></tr>
+    <tr><td>30000</td><td>n8n</td><td>HTTP</td></tr>
+    <tr><td>30001</td><td>Qdrant</td><td>HTTP</td></tr>
+    <tr><td>30002</td><td>k8s-watcher</td><td>HTTP</td></tr>
+    <tr><td>30003</td><td>pgAdmin</td><td>HTTP</td></tr>
+    <tr><td>30004</td><td>PostgreSQL</td><td>TCP</td></tr>
+  </table>
+</div>
+</section>
+
+<!-- Section 2: Architecture -->
+<section id="architecture">
+<h2><span class="num">02</span> System Architecture</h2>
+
+<div class="flow-diagram">
+<pre>
+<span class="flow-data">Kubernetes API (kind cluster: k8s-ai)</span>
+    <span class="flow-arrow">|</span>  watches 10 resource types (Namespace, Pod, Service, ConfigMap, PVC, Secret, Deployment, ReplicaSet, StatefulSet, DaemonSet)
+    <span class="flow-arrow">v</span>
+<span class="flow-node">k8s-watcher</span> (Python pod, in-cluster config)
+    <span class="flow-arrow">|</span>  publishes JSON events to Kafka
+    <span class="flow-arrow">v</span>
+<span class="flow-node">Kafka</span> (topic: k8s-resources, KRaft mode)
+    <span class="flow-arrow">|</span>  consumed by n8n Kafka Trigger
+    <span class="flow-arrow">v</span>
+<span class="flow-node">n8n CDC Flow</span> &rarr; Parse &rarr; Delete old vector &rarr; Embed (nomic-embed-text) &rarr; Upsert to Qdrant
+    <span class="flow-arrow">|</span>
+    <span class="flow-arrow">v</span>
+<span class="flow-node">Qdrant</span> (collection: k8s, 768-dim Cosine, ~70 points)
+    <span class="flow-arrow">^</span>                           <span class="flow-arrow">|</span>
+    <span class="flow-arrow">|</span> (tool queries)             <span class="flow-arrow">|</span> (semantic search results)
+    <span class="flow-arrow">|</span>                           <span class="flow-arrow">v</span>
+<span class="flow-node">n8n AI Agent Flow</span> &larr; Chat Trigger &larr; <span class="flow-data">User Query</span>
+    <span class="flow-arrow">|</span>
+    <span class="flow-arrow">|</span>  AI Agent (toolsAgent, maxIterations=5)
+    <span class="flow-arrow">|</span>    <span class="flow-tool">Tool: kubernetes_inventory</span> (scroll all Qdrant data, group by kind/ns)
+    <span class="flow-arrow">|</span>    <span class="flow-tool">Tool: kubernetes_search</span> (Qdrant semantic search, topK=20)
+    <span class="flow-arrow">|</span>    <span class="flow-tool">LLM: qwen3:14b-k8s</span> (custom model, temperature 0)
+    <span class="flow-arrow">|</span>    <span class="flow-tool">Memory: PostgreSQL</span> (session: k8s-ai-global, 5-turn window)
+    <span class="flow-arrow">|</span>
+    <span class="flow-arrow">v</span>
+<span class="flow-data">Response</span> (clean markdown table)
+</pre>
+</div>
+
+<h3>Six Pods in k8s-ai Namespace</h3>
+<table>
+  <tr><th>Pod</th><th>Role</th><th>Image</th></tr>
+  <tr><td>kafka-0</td><td>Message broker (KRaft mode, no ZooKeeper)</td><td>confluentinc/cp-kafka</td></tr>
+  <tr><td>qdrant-*</td><td>Vector database (768-dim Cosine)</td><td>qdrant/qdrant</td></tr>
+  <tr><td>k8s-watcher-*</td><td>K8s API watcher &rarr; Kafka publisher</td><td>k8s-watcher:latest (custom)</td></tr>
+  <tr><td>n8n-*</td><td>Workflow engine (4 workflows)</td><td>n8nio/n8n:latest</td></tr>
+  <tr><td>postgres-*</td><td>Chat memory database</td><td>postgres:16</td></tr>
+  <tr><td>pgadmin-*</td><td>Database browser UI</td><td>dpage/pgadmin4</td></tr>
+</table>
+</section>
+
+<!-- Section 3: Setup -->
+<section id="setup">
+<h2><span class="num">03</span> Setup & Installation</h2>
+
+<h3>Prerequisites</h3>
+<table>
+  <tr><th>Tool</th><th>Version</th><th>Check Command</th></tr>
+  <tr><td>Docker Desktop</td><td>4.x+</td><td><code>docker info --format '{{.ServerVersion}}'</code></td></tr>
+  <tr><td>kind</td><td>0.24+</td><td><code>kind version</code></td></tr>
+  <tr><td>kubectl</td><td>any</td><td><code>kubectl version --client</code></td></tr>
+  <tr><td>Ollama</td><td>any</td><td><code>ollama --version</code></td></tr>
+  <tr><td>Node.js</td><td>18+</td><td><code>node --version</code></td></tr>
+  <tr><td>python3</td><td>3.8+</td><td><code>python3 --version</code></td></tr>
+</table>
+
+<h3>One-Command Setup</h3>
+<pre><code>./scripts/setup.sh</code></pre>
+
+<p>This handles: cluster creation, pod deployment, k8s-watcher image build, Qdrant collection, workflow import, credential setup, activation, and E2E test execution (~4 minutes).</p>
+
+<h3>Setup Options</h3>
+<pre><code>./scripts/setup.sh                     <span style="color:var(--text-dim)"># full from-scratch setup</span>
+./scripts/setup.sh --keep-cluster      <span style="color:var(--text-dim)"># reuse existing cluster</span>
+./scripts/setup.sh --no-test           <span style="color:var(--text-dim)"># skip E2E tests</span>
+./scripts/cleanup.sh                   <span style="color:var(--text-dim)"># delete cluster (keep data/)</span>
+./scripts/cleanup.sh --wipe-data --yes <span style="color:var(--text-dim)"># full clean slate</span></code></pre>
+</section>
+
+<!-- Section 4: Health -->
+<section id="health">
+<h2><span class="num">04</span> Verifying System Health</h2>
+
+<pre><code><span style="color:var(--text-dim)"># All 6 pods running?</span>
+kubectl --context kind-k8s-ai -n k8s-ai get pods
+
+<span style="color:var(--text-dim)"># k8s-watcher healthy?</span>
+curl http://localhost:30002/healthz
+
+<span style="color:var(--text-dim)"># Qdrant populated?</span>
+curl -s http://localhost:30001/collections/k8s | python3 -c \
+  "import sys,json; r=json.load(sys.stdin)['result']; print(f'Points: {r[\"points_count\"]}')"
+
+<span style="color:var(--text-dim)"># AI webhook active? (should return 200)</span>
+curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:30000/webhook/k8s-ai-chat/chat \
+  -H 'Content-Type: application/json' -d '{"chatInput":"hello"}'
+
+<span style="color:var(--text-dim)"># Ollama models present?</span>
+ollama list | grep -E "nomic-embed-text|qwen3"</code></pre>
+
+<div class="callout warn">
+  <div class="callout-title">If webhook returns 404</div>
+  <p>Workflows are inactive. Run: <code>./scripts/setup.sh --keep-cluster --no-test</code></p>
+</div>
+</section>
+
+<!-- Section 5: Sign-In -->
+<section id="signin">
+<h2><span class="num">05</span> n8n Dashboard: Sign-In & Navigation</h2>
+
+<h3>Step 1: Open Sign-In Page</h3>
+<p>Navigate to: <a href="http://localhost:30000">http://localhost:30000</a></p>
+<div class="screenshot"><img src="../screenshots/01-signin-page.png" alt="n8n sign-in page"><figcaption>n8n sign-in page at localhost:30000</figcaption></div>
+
+<h3>Step 2: Enter Credentials</h3>
+<div class="cred-box">
+  <h4>n8n Login</h4>
+  <p>Email: <code>assaduzzaman.ict@gmail.com</code> &nbsp;|&nbsp; Password: <code>********</code></p>
+</div>
+<div class="screenshot"><img src="../screenshots/02-signin-credentials-filled.png" alt="credentials filled"><figcaption>Email and password entered</figcaption></div>
+
+<h3>Step 3: Landing Page</h3>
+<div class="screenshot"><img src="../screenshots/02b-post-signin-landing.png" alt="post sign-in landing"><figcaption>n8n editor interface after sign-in</figcaption></div>
+
+<h3>Step 4: Workflow Dashboard</h3>
+<div class="screenshot"><img src="../screenshots/03-workflow-dashboard.png" alt="workflow dashboard"><figcaption>All 4 workflows visible in the dashboard</figcaption></div>
+
+<h3>Step 5: Verify Active Status</h3>
+<div class="screenshot"><img src="../screenshots/04-workflow-list-active-badges.png" alt="active badges"><figcaption>All workflows should show green Active badges</figcaption></div>
+
+<h3>Credentials List</h3>
+<div class="screenshot"><img src="../screenshots/cred-01-credentials-list.png" alt="credentials list"><figcaption>Settings &rarr; Credentials: Ollama, Kafka, Qdrant, Postgres connections</figcaption></div>
+</section>
+
+<!-- Section 6: CDC Flow -->
+<section id="cdc-flow">
+<h2><span class="num">06</span> Workflow 1: CDC Pipeline (Real-Time Sync)</h2>
+
+<div class="callout info">
+  <div class="callout-title">Purpose</div>
+  <p>Continuously synchronizes Kubernetes cluster state into the Qdrant vector database. When any of the 10 watched resource types is created, updated, or deleted, the change flows through Kafka into Qdrant within seconds.</p>
+</div>
+
+<p><strong>Workflow ID:</strong> <code>k8sCDCflow00001</code> &nbsp;|&nbsp; <strong>Trigger:</strong> Kafka topic <code>k8s-resources</code></p>
+
+<h3>Flow Diagram</h3>
+<div class="flow-diagram">
+<pre>
+<span class="flow-node">Kafka Trigger</span> (topic: k8s-resources, group: n8n-cdc-consumer)
+    <span class="flow-arrow">|</span> raw JSON message from k8s-watcher
+    <span class="flow-arrow">v</span>
+<span class="flow-node">Parse Message</span> <span class="badge orange">Code</span>
+    <span class="flow-arrow">|</span> extract event_type, resource_uid, kind, name, namespace, embed_text
+    <span class="flow-arrow">v</span>
+<span class="flow-condition">Is Delete Event?</span> <span class="badge purple">If/Else</span>
+    <span class="flow-arrow">|</span>                       <span class="flow-arrow">|</span>
+    <span class="flow-arrow">| TRUE</span>                  <span class="flow-arrow">| FALSE</span>
+    <span class="flow-arrow">v</span>                       <span class="flow-arrow">v</span>
+<span class="flow-node">Delete Vector</span> <span class="badge blue">HTTP</span>  <span class="flow-node">Format Document</span> <span class="badge orange">Code</span>
+    (filter by                  <span class="flow-arrow">|</span> build pageContent + metadata
+     resource_uid)              <span class="flow-arrow">v</span>
+    <span style="color:var(--danger)">[STOP]</span>           <span class="flow-node">Generate Embedding</span> <span class="badge blue">HTTP</span>
+                                <span class="flow-arrow">|</span> POST to Ollama nomic-embed-text
+                                <span class="flow-arrow">|</span> returns 768-dim vector
+                                <span class="flow-arrow">v</span>
+                          <span class="flow-node">Upsert to Qdrant</span> <span class="badge blue">HTTP</span>
+                                PUT /collections/k8s/points
+                                (resource_uid as point ID)
+</pre>
+</div>
+
+<h3>Canvas Screenshot</h3>
+<div class="screenshot"><img src="../screenshots/05-cdc-workflow-canvas.png" alt="CDC workflow canvas"><figcaption>CDC_K8s_Flow canvas in n8n editor</figcaption></div>
+
+<h3 id="cdc-nodes">Node-by-Node Encyclopedia</h3>
+
+<div class="node-card trigger">
+  <div class="node-header">
+    <span class="node-name">1. Kafka Trigger</span>
+    <span class="node-type">n8n-nodes-base.kafkaTrigger v1</span>
+  </div>
+  <div class="node-purpose">Listens for new messages on the k8s-resources Kafka topic</div>
+  <table>
+    <tr><th>Setting</th><th>Value</th><th>Why</th></tr>
+    <tr><td>Topic</td><td><code>k8s-resources</code></td><td>Single topic for all 10 resource types</td></tr>
+    <tr><td>Group ID</td><td><code>n8n-cdc-consumer</code></td><td>Consumer group for offset tracking</td></tr>
+    <tr><td>Auto Offset Reset</td><td><code>latest</code></td><td>Only consume NEW messages; prevents replay of history on restart</td></tr>
+    <tr><td>Auto Topic Creation</td><td><code>false</code></td><td>Topic must be pre-created by Kafka</td></tr>
+  </table>
+  <div class="callout danger" style="margin-top:12px;">
+    <div class="callout-title">Critical: autoOffsetReset must be "latest"</div>
+    <p>Changing to "earliest" causes Kafka to replay the entire topic history on every n8n restart, flooding Qdrant with stale/duplicate points and breaking the Reset E2E test.</p>
+  </div>
+  <div class="screenshot"><img src="../screenshots/cdc-node-01-kafka-trigger.png" alt="Kafka Trigger config"><figcaption>Kafka Trigger node configuration</figcaption></div>
+</div>
+
+<div class="node-card code">
+  <div class="node-header">
+    <span class="node-name">2. Parse Message</span>
+    <span class="node-type">n8n-nodes-base.code v2 (JavaScript)</span>
+  </div>
+  <div class="node-purpose">Extracts JSON payload from Kafka message and ensures embed_text field exists</div>
+  <p><strong>Value:</strong> Converts raw Kafka bytes into structured data. If k8s-watcher already included <code>embed_text</code>, uses it directly. Otherwise, constructs natural-language embed text: <code>"Kubernetes {kind} named {name} in namespace {ns}. Labels: ..."</code></p>
+  <p><strong>Customization tip:</strong> To change how resources are described to the AI, modify the embed_text construction in this node. Natural language format gives significantly better cosine similarity than terse key-value formats.</p>
+  <div class="screenshot"><img src="../screenshots/cdc-node-02-parse-message.png" alt="Parse Message config"><figcaption>Parse Message code node</figcaption></div>
+</div>
+
+<div class="node-card">
+  <div class="node-header">
+    <span class="node-name">3. Is Delete Event?</span>
+    <span class="node-type">n8n-nodes-base.if v2</span>
+  </div>
+  <div class="node-purpose">Routes DELETED events to cleanup path; all other events continue to upsert path</div>
+  <p><strong>Condition:</strong> <code>event_type === "DELETED"</code> (string equals, case-sensitive)</p>
+  <p><strong>Value:</strong> Prevents inserting a vector for a resource that no longer exists. DELETED events only need to remove the old Qdrant point.</p>
+  <div class="screenshot"><img src="../screenshots/cdc-node-04-is-delete.png" alt="Is Delete condition"><figcaption>If/Else condition node</figcaption></div>
+</div>
+
+<div class="node-card http">
+  <div class="node-header">
+    <span class="node-name">4. Delete Existing Vector</span>
+    <span class="node-type">n8n-nodes-base.httpRequest v4</span>
+  </div>
+  <div class="node-purpose">Removes the previous Qdrant point for this resource before inserting the updated version</div>
+  <p><strong>Endpoint:</strong> <code>POST http://qdrant:6333/collections/k8s/points/delete</code></p>
+  <p><strong>Body:</strong> Filter by <code>metadata.resource_uid</code> &mdash; finds both test-inserted and CDC-inserted points.</p>
+  <p><strong>Value:</strong> Ensures deduplication. Without this, every MODIFIED event would create a duplicate vector. The filter-delete approach works regardless of how the point was originally inserted (by point ID or by auto-generated UUID).</p>
+  <div class="screenshot"><img src="../screenshots/cdc-node-03-delete-vector.png" alt="Delete Vector config"><figcaption>HTTP DELETE to Qdrant filter API</figcaption></div>
+</div>
+
+<div class="node-card code">
+  <div class="node-header">
+    <span class="node-name">5. Format Document</span>
+    <span class="node-type">n8n-nodes-base.code v2 (JavaScript)</span>
+  </div>
+  <div class="node-purpose">Structures the payload with pageContent (for embedding) and metadata (for Qdrant storage)</div>
+  <p><strong>Value:</strong> Creates a compact <code>spec_summary</code> instead of storing the entire raw_spec_json. Includes resource-type-specific parsing: container images for Deployments, port mappings for Services, storage for PVCs, key names (never values) for Secrets.</p>
+  <p><strong>Customization tip:</strong> To add custom metadata fields to Qdrant points, modify the <code>metadata</code> object in this node. Every field here becomes searchable/filterable in Qdrant.</p>
+  <div class="screenshot"><img src="../screenshots/cdc-node-05-format-document.png" alt="Format Document config"><figcaption>Format Document code node with spec_summary builder</figcaption></div>
+</div>
+
+<div class="node-card http">
+  <div class="node-header">
+    <span class="node-name">6. Generate Embedding</span>
+    <span class="node-type">n8n-nodes-base.httpRequest v4</span>
+  </div>
+  <div class="node-purpose">Calls Ollama to generate a 768-dimensional vector from the embed_text</div>
+  <p><strong>Endpoint:</strong> <code>POST http://host.docker.internal:11434/api/embeddings</code></p>
+  <p><strong>Model:</strong> <code>nomic-embed-text:latest</code></p>
+  <p><strong>Retry:</strong> 3 attempts with 2s delay (handles Ollama queue contention)</p>
+  <p><strong>Batching:</strong> 1 message per batch, 1s interval (prevents Ollama overload)</p>
+  <p><strong>Value:</strong> Converts natural-language resource descriptions into numerical vectors that enable semantic search. The 768-dim nomic-embed-text model produces scores in the 0.38&ndash;0.70 range for Kubernetes metadata.</p>
+</div>
+
+<div class="node-card http">
+  <div class="node-header">
+    <span class="node-name">7. Upsert to Qdrant</span>
+    <span class="node-type">n8n-nodes-base.httpRequest v4</span>
+  </div>
+  <div class="node-purpose">Inserts the vector + metadata into the Qdrant k8s collection</div>
+  <p><strong>Endpoint:</strong> <code>PUT http://qdrant:6333/collections/k8s/points</code></p>
+  <p><strong>Point ID:</strong> <code>resource_uid</code> (Kubernetes metadata.uid &mdash; deterministic, enables idempotent upserts)</p>
+  <p><strong>Retry:</strong> 3 attempts with 2s delay</p>
+  <p><strong>Value:</strong> Uses HTTP PUT (not the n8n Qdrant node) because the native node auto-generates UUID point IDs and cannot use <code>resource_uid</code>. HTTP PUT enables idempotent upserts &mdash; same UID always overwrites the same point.</p>
+</div>
+
+<h3>Execution History</h3>
+<div class="screenshot"><img src="../screenshots/06-cdc-executions-list.png" alt="CDC executions"><figcaption>Each CDC event appears as an execution</figcaption></div>
+<div class="screenshot"><img src="../screenshots/07-cdc-execution-detail.png" alt="CDC execution detail"><figcaption>Click any execution to see data flowing through each node</figcaption></div>
+</section>
+
+<!-- Section 7: AI Agent Flow -->
+<section id="ai-flow">
+<h2><span class="num">07</span> Workflow 2: AI Agent Query Pipeline</h2>
+
+<div class="callout info">
+  <div class="callout-title">Purpose</div>
+  <p>Receives natural-language queries via a public chat interface. An AI Agent with two tools fetches data from Qdrant (semantic search + full inventory scroll), generates a response using a custom Ollama model, and returns clean markdown tables. Conversation context is maintained across queries via PostgreSQL-backed memory.</p>
+</div>
+
+<p><strong>Workflow ID:</strong> <code>k8sAIflow000001</code> &nbsp;|&nbsp; <strong>Trigger:</strong> Chat webhook at <code>/webhook/k8s-ai-chat/chat</code></p>
+
+<h3>Flow Diagram</h3>
+<div class="flow-diagram">
+<pre>
+<span class="flow-data">User Query</span> (browser chat or curl POST)
+    <span class="flow-arrow">|</span>
+    <span class="flow-arrow">v</span>
+<span class="flow-node">Chat Trigger</span> (public webhook: k8s-ai-chat)
+    <span class="flow-arrow">|</span>
+    <span class="flow-arrow">v</span>
+<span class="flow-node">AI Agent</span> (toolsAgent, maxIterations=5)
+    <span class="flow-arrow">|</span>
+    <span class="flow-arrow">|</span>&mdash;&mdash; <span class="flow-tool">ai_languageModel</span> &rarr; <span class="flow-node">Ollama Chat Model</span> (qwen3:14b-k8s, temp=0)
+    <span class="flow-arrow">|</span>
+    <span class="flow-arrow">|</span>&mdash;&mdash; <span class="flow-tool">ai_tool [1]</span> &rarr; <span class="flow-node">Qdrant Vector Store</span> "kubernetes_search"
+    <span class="flow-arrow">|</span>                     <span class="flow-arrow">|</span>
+    <span class="flow-arrow">|</span>                     <span class="flow-arrow">|</span>&mdash; <span class="flow-tool">ai_embedding</span> &rarr; <span class="flow-node">Embeddings Ollama</span> (nomic-embed-text)
+    <span class="flow-arrow">|</span>
+    <span class="flow-arrow">|</span>&mdash;&mdash; <span class="flow-tool">ai_tool [2]</span> &rarr; <span class="flow-node">Code Tool</span> "kubernetes_inventory"
+    <span class="flow-arrow">|</span>                     (HTTP scroll all Qdrant points, group by kind/ns)
+    <span class="flow-arrow">|</span>
+    <span class="flow-arrow">|</span>&mdash;&mdash; <span class="flow-tool">ai_memory</span> &rarr; <span class="flow-node">Postgres Chat Memory</span>
+    <span class="flow-arrow">|</span>                     (session: k8s-ai-global, 5-turn window)
+    <span class="flow-arrow">v</span>
+<span class="flow-data">Response</span> (markdown table + optional 1-line summary)
+</pre>
+</div>
+
+<h3>Canvas Screenshot</h3>
+<div class="screenshot"><img src="../screenshots/08-ai-workflow-canvas.png" alt="AI workflow canvas"><figcaption>AI_K8s_Flow canvas showing the multi-tool AI Agent architecture</figcaption></div>
+
+<h3 id="ai-nodes">Node-by-Node Encyclopedia</h3>
+
+<div class="node-card trigger">
+  <div class="node-header">
+    <span class="node-name">1. Chat Trigger</span>
+    <span class="node-type">@n8n/n8n-nodes-langchain.chatTrigger v1.4</span>
+  </div>
+  <div class="node-purpose">Public webhook that accepts chat messages &mdash; no authentication required</div>
+  <table>
+    <tr><th>Setting</th><th>Value</th><th>Why</th></tr>
+    <tr><td>Webhook ID</td><td><code>k8s-ai-chat</code></td><td>Creates URL: <code>/webhook/k8s-ai-chat/chat</code></td></tr>
+    <tr><td>Public</td><td><code>true</code></td><td>Accessible without n8n login</td></tr>
+    <tr><td>Title</td><td>"K8s AI Assistant"</td><td>Shown in chat UI header</td></tr>
+    <tr><td>Initial Message</td><td>"Hi there! I am k8s assistant..."</td><td>Greeting when chat opens</td></tr>
+  </table>
+  <p><strong>Value:</strong> Provides both a browser-based chat UI and a REST API endpoint. The same webhook serves both: browsers get the rendered chat widget, <code>curl</code> gets JSON responses.</p>
+  <p><strong>Customization tip:</strong> Change the <code>initialMessages</code> to modify the greeting. Change the webhook path in <code>webhookId</code> to use a different URL.</p>
+  <div class="screenshot"><img src="../screenshots/ai-node-01-chat-trigger.png" alt="Chat Trigger config"><figcaption>Chat Trigger node with public access enabled</figcaption></div>
+</div>
+
+<div class="node-card ai">
+  <div class="node-header">
+    <span class="node-name">2. AI Agent</span>
+    <span class="node-type">@n8n/n8n-nodes-langchain.agent v1.7</span>
+  </div>
+  <div class="node-purpose">The orchestrator &mdash; reads the query, decides which tool to call, interprets results, and generates the final response</div>
+  <table>
+    <tr><th>Setting</th><th>Value</th><th>Why</th></tr>
+    <tr><td>Agent Type</td><td><code>toolsAgent</code></td><td>Multi-tool agent that decides which tool to call</td></tr>
+    <tr><td>Max Iterations</td><td><code>5</code></td><td>Up to 5 tool calls per query (prevents infinite loops)</td></tr>
+    <tr><td>System Message</td><td>(detailed &mdash; see below)</td><td>Controls tool selection logic and output format</td></tr>
+  </table>
+  <h4>System Prompt (Critical for Behavior)</h4>
+  <p>The AI Agent's system message defines HOW the agent selects tools and formats responses. This is the <strong>second layer</strong> of the two-layer prompt system (Modelfile SYSTEM is layer 1):</p>
+  <pre><code>You are a Kubernetes cluster monitoring assistant for the kind cluster "k8s-ai".
+
+/no_think
+
+You have TWO tools. You MUST call a tool before EVERY answer.
+
+## Tool Selection
+
+**kubernetes_inventory** &mdash; ALWAYS use this when:
+- Counting ("how many pods?")
+- Listing ALL resources of a type ("list all configmaps")
+- Aggregation ("resources per namespace")
+- Follow-up about previously counted resources
+- Cluster overview ("what is running?")
+
+**kubernetes_search** &mdash; Use ONLY when:
+- ONE specific named resource ("show me the coredns deployment")
+- Searching by label ("find services with app=kafka")
+- Deep details about a single resource
+
+## Critical Rules
+1. ALWAYS call a tool before answering
+2. When in doubt, use kubernetes_inventory
+3. NEVER invent or hallucinate resources
+4. Output concise markdown tables
+5. Never expose resource_uid or secret values</code></pre>
+  <p><strong>Customization tip:</strong> To add new tools or change tool selection logic, modify this system message. The model reads these rules on every query.</p>
+  <div class="screenshot"><img src="../screenshots/ai-node-02-ai-agent.png" alt="AI Agent config"><figcaption>AI Agent node with tool connections</figcaption></div>
+</div>
+
+<div class="node-card ai">
+  <div class="node-header">
+    <span class="node-name">3. Ollama Chat Model</span>
+    <span class="node-type">@n8n/n8n-nodes-langchain.lmChatOllama v1</span>
+  </div>
+  <div class="node-purpose">The custom qwen3:14b-k8s model &mdash; generates deterministic, table-formatted responses</div>
+  <table>
+    <tr><th>Setting</th><th>Value</th><th>Why</th></tr>
+    <tr><td>Model</td><td><code>qwen3:14b-k8s</code></td><td>Custom model with baked-in K8s assistant persona</td></tr>
+    <tr><td>Temperature</td><td><code>0</code></td><td>Deterministic &mdash; same query always gives same format</td></tr>
+    <tr><td>Num Predict</td><td><code>2048</code></td><td>Max output tokens per response</td></tr>
+    <tr><td>Num Ctx</td><td><code>32768</code></td><td>32K context window for large tool results</td></tr>
+    <tr><td>Base URL</td><td><code>http://host.docker.internal:11434</code></td><td>Ollama runs on host, not in cluster</td></tr>
+  </table>
+  <p><strong>Value:</strong> The custom model has a baked-in system prompt (table-only output, no thinking blocks) plus parameters (temperature 0, repeat_penalty 1). This creates consistent, machine-parseable output.</p>
+  <p><strong>Customization tip:</strong> To use a different model, change the model name. To use a cloud LLM, replace this node with an OpenAI or Anthropic chat model node.</p>
+  <div class="screenshot"><img src="../screenshots/ai-node-03-ollama-chat-model.png" alt="Ollama Chat Model config"><figcaption>Ollama Chat Model with qwen3:14b-k8s selected</figcaption></div>
+</div>
+
+<div class="node-card ai">
+  <div class="node-header">
+    <span class="node-name">4. Qdrant Vector Store (kubernetes_search)</span>
+    <span class="node-type">@n8n/n8n-nodes-langchain.vectorStoreQdrant v1</span>
+  </div>
+  <div class="node-purpose">Semantic search tool &mdash; embeds the query and finds the most similar K8s resources in Qdrant</div>
+  <table>
+    <tr><th>Setting</th><th>Value</th><th>Why</th></tr>
+    <tr><td>Mode</td><td><code>retrieve-as-tool</code></td><td>AI Agent decides when to call it (not always)</td></tr>
+    <tr><td>Tool Name</td><td><code>kubernetes_search</code></td><td>How the Agent refers to this tool</td></tr>
+    <tr><td>Collection</td><td><code>k8s</code></td><td>Qdrant collection name</td></tr>
+    <tr><td>Top K</td><td><code>20</code></td><td>Return top 20 most similar vectors</td></tr>
+  </table>
+  <p><strong>Value:</strong> Enables the AI to answer questions about specific resources ("tell me about coredns") by finding semantically similar vectors. The score threshold of 0.3 ensures Deployments (which score ~0.43) aren't silently excluded.</p>
+  <p><strong>Customization tip:</strong> Increase Top K for larger clusters. Lower the score threshold if resources are being missed. To add a second collection (e.g., for logs), add another Vector Store node.</p>
+  <div class="screenshot"><img src="../screenshots/ai-node-04-qdrant-vector-store.png" alt="Qdrant Vector Store config"><figcaption>Qdrant Vector Store in retrieve-as-tool mode</figcaption></div>
+</div>
+
+<div class="node-card ai">
+  <div class="node-header">
+    <span class="node-name">5. Embeddings Ollama</span>
+    <span class="node-type">@n8n/n8n-nodes-langchain.embeddingsOllama v1</span>
+  </div>
+  <div class="node-purpose">Generates 768-dimensional vectors for query embedding (used by the kubernetes_search tool)</div>
+  <table>
+    <tr><th>Setting</th><th>Value</th><th>Why</th></tr>
+    <tr><td>Model</td><td><code>nomic-embed-text:latest</code></td><td>768-dim embeddings, optimized for text similarity</td></tr>
+  </table>
+  <p><strong>Value:</strong> Converts the user's natural-language query into a vector that can be compared against stored resource vectors using cosine similarity.</p>
+  <div class="screenshot"><img src="../screenshots/ai-node-05-embeddings-ollama.png" alt="Embeddings Ollama config"><figcaption>Embeddings model configuration</figcaption></div>
+</div>
+
+<div class="node-card code">
+  <div class="node-header">
+    <span class="node-name">6. Kubernetes Inventory Tool (Code Tool)</span>
+    <span class="node-type">@n8n/n8n-nodes-langchain.toolCode v1</span>
+  </div>
+  <div class="node-purpose">Scrolls ALL Qdrant points and returns a complete inventory grouped by kind and namespace</div>
+  <table>
+    <tr><th>Setting</th><th>Value</th><th>Why</th></tr>
+    <tr><td>Tool Name</td><td><code>kubernetes_inventory</code></td><td>How the Agent refers to this tool</td></tr>
+    <tr><td>Language</td><td>JavaScript</td><td>Runs inside n8n's sandbox</td></tr>
+  </table>
+  <p><strong>How it works:</strong></p>
+  <ol>
+    <li>Paginates through ALL Qdrant points (100 per page) using <code>this.helpers.httpRequest()</code></li>
+    <li>Extracts kind, name, namespace, labels, spec from each point's metadata</li>
+    <li>Groups resources by namespace, then by kind within each namespace</li>
+    <li>Returns a formatted text with namespace summaries and per-kind breakdowns</li>
+  </ol>
+  <p><strong>Value:</strong> Enables accurate counting and listing queries. The kubernetes_search tool (vector search) only returns top-20 matches &mdash; it can't count ALL pods. This tool scrolls everything and gives complete answers.</p>
+  <p><strong>Why Code Tool instead of Workflow Tool:</strong> The <code>toolWorkflow</code> node requires complex <code>workflowInputs</code> resourceMapper config that fails on JSON import. <code>toolCode</code> with <code>this.helpers.httpRequest()</code> is simpler and reliable.</p>
+  <p><strong>Customization tip:</strong> To add custom grouping (e.g., by label), modify the JavaScript code. To add new data sources, add more HTTP calls.</p>
+</div>
+
+<div class="node-card ai">
+  <div class="node-header">
+    <span class="node-name">7. Postgres Chat Memory</span>
+    <span class="node-type">@n8n/n8n-nodes-langchain.memoryPostgresChat v1.3</span>
+  </div>
+  <div class="node-purpose">Stores conversation history in PostgreSQL for multi-turn context awareness</div>
+  <table>
+    <tr><th>Setting</th><th>Value</th><th>Why</th></tr>
+    <tr><td>Session ID</td><td><code>k8s-ai-global</code></td><td>Single shared session (single-user assistant)</td></tr>
+    <tr><td>Context Window</td><td><code>5</code></td><td>Last 5 message pairs retained</td></tr>
+    <tr><td>Table</td><td><code>n8n_chat_histories</code></td><td>PostgreSQL table for storage</td></tr>
+    <tr><td>Database</td><td><code>n8n_memory</code></td><td>Dedicated database for chat history</td></tr>
+  </table>
+  <p><strong>Value:</strong> Enables follow-up queries like "list them" after "how many namespaces?". Without memory, every query would be independent.</p>
+  <p><strong>Customization tip:</strong> For multi-user support, change <code>sessionKey</code> to a dynamic value (e.g., user ID from the request). Increase <code>contextWindowLength</code> for longer conversations (costs more tokens).</p>
+  <div class="screenshot"><img src="../screenshots/ai-node-06-postgres-memory.png" alt="Postgres Memory config"><figcaption>PostgreSQL-backed chat memory with 5-turn window</figcaption></div>
+</div>
+
+<h3 id="ai-tools">Tool Selection Decision Matrix</h3>
+<table>
+  <tr><th>User Query</th><th>Tool Called</th><th>Why</th></tr>
+  <tr><td>"How many pods are running?"</td><td><span class="badge orange">kubernetes_inventory</span></td><td>Counting query &mdash; needs ALL data</td></tr>
+  <tr><td>"List all namespaces"</td><td><span class="badge orange">kubernetes_inventory</span></td><td>Listing ALL resources of a type</td></tr>
+  <tr><td>"Show deployments per namespace"</td><td><span class="badge orange">kubernetes_inventory</span></td><td>Aggregation query</td></tr>
+  <tr><td>"What is running in the cluster?"</td><td><span class="badge orange">kubernetes_inventory</span></td><td>Cluster overview</td></tr>
+  <tr><td>"Tell me about the coredns deployment"</td><td><span class="badge purple">kubernetes_search</span></td><td>Specific named resource</td></tr>
+  <tr><td>"Find services with app=kafka"</td><td><span class="badge purple">kubernetes_search</span></td><td>Search by label</td></tr>
+  <tr><td>"What are the container images in kube-system?"</td><td><span class="badge purple">kubernetes_search</span></td><td>Deep details about resources</td></tr>
+</table>
+</section>
+
+<!-- Section 8: Reset Flow -->
+<section id="reset-flow">
+<h2><span class="num">08</span> Workflow 3: Reset & Resync</h2>
+
+<div class="callout info">
+  <div class="callout-title">Purpose</div>
+  <p>Wipes the entire Qdrant vector database and triggers a full re-index from the live Kubernetes cluster. Use this when vectors are stale, corrupted, or after schema changes.</p>
+</div>
+
+<p><strong>Workflow ID:</strong> <code>k8sRSTflow00001</code> &nbsp;|&nbsp; <strong>Triggers:</strong> POST <code>/webhook/k8s-reset</code> + Manual Trigger</p>
+
+<h3>Flow Diagram</h3>
+<div class="flow-diagram">
+<pre>
+<span class="flow-node">Manual Trigger</span> &mdash;&mdash;&mdash;&mdash;&mdash;+
+                           <span class="flow-arrow">|</span>
+<span class="flow-node">Reset Webhook</span> &mdash;&mdash;&mdash;&mdash;&mdash;&mdash;+
+(POST /webhook/k8s-reset)  <span class="flow-arrow">|</span>
+                           <span class="flow-arrow">v</span>
+                  <span class="flow-node">Delete Qdrant Collection</span> <span class="badge blue">HTTP DELETE</span>
+                  (http://qdrant:6333/collections/k8s)
+                           <span class="flow-arrow">|</span>
+                           <span class="flow-arrow">v</span>
+                  <span class="flow-node">Recreate Qdrant Collection</span> <span class="badge blue">HTTP PUT</span>
+                  (768-dim Cosine, 2 segments, replication=1)
+                           <span class="flow-arrow">|</span>
+                           <span class="flow-arrow">v</span>
+                  <span class="flow-node">Trigger Resync</span> <span class="badge blue">HTTP POST</span>
+                  (http://k8s-watcher:8080/resync)
+                           <span class="flow-arrow">|</span>
+                           <span class="flow-arrow">v</span>
+                  <span class="flow-node">Format Response</span> <span class="badge orange">Code</span>
+                  {status:"ok", message:"...", reset_at:"..."}
+</pre>
+</div>
+
+<div class="screenshot"><img src="../screenshots/15-reset-workflow-canvas.png" alt="Reset workflow canvas"><figcaption>Reset_K8s_Flow canvas with both trigger paths</figcaption></div>
+
+<h3 id="reset-nodes">Node-by-Node Encyclopedia</h3>
+
+<div class="node-card trigger">
+  <div class="node-header"><span class="node-name">1. Reset Webhook</span><span class="node-type">Webhook v1</span></div>
+  <div class="node-purpose">Accepts POST requests to trigger the reset pipeline</div>
+  <p><strong>Endpoint:</strong> <code>POST http://localhost:30000/webhook/k8s-reset</code></p>
+  <p><strong>Response Mode:</strong> <code>lastNode</code> &mdash; returns the Format Response output as the HTTP response</p>
+  <div class="screenshot"><img src="../screenshots/reset-node-01-webhook.png" alt="Reset Webhook"><figcaption>Reset Webhook configuration</figcaption></div>
+</div>
+
+<div class="node-card http">
+  <div class="node-header"><span class="node-name">2. Delete Qdrant Collection</span><span class="node-type">HTTP Request v4</span></div>
+  <div class="node-purpose">Drops the entire k8s collection &mdash; all vectors and metadata removed</div>
+  <p><strong>URL:</strong> <code>DELETE http://qdrant:6333/collections/k8s</code></p>
+  <p><strong>Value:</strong> Clean slate. Faster than deleting points one-by-one.</p>
+  <div class="screenshot"><img src="../screenshots/reset-node-02-delete-collection.png" alt="Delete Collection"><figcaption>HTTP DELETE to remove the entire collection</figcaption></div>
+</div>
+
+<div class="node-card http">
+  <div class="node-header"><span class="node-name">3. Recreate Qdrant Collection</span><span class="node-type">HTTP Request v4</span></div>
+  <div class="node-purpose">Creates a fresh k8s collection with the correct vector schema</div>
+  <p><strong>URL:</strong> <code>PUT http://qdrant:6333/collections/k8s</code></p>
+  <p><strong>Schema:</strong> 768 dimensions, Cosine distance, 2 segments, replication factor 1</p>
+  <p><strong>Value:</strong> Ensures the collection schema matches what the embedding model produces (768-dim for nomic-embed-text).</p>
+  <div class="screenshot"><img src="../screenshots/reset-node-03-recreate-collection.png" alt="Recreate Collection"><figcaption>PUT request with vector schema configuration</figcaption></div>
+</div>
+
+<div class="node-card http">
+  <div class="node-header"><span class="node-name">4. Trigger Resync</span><span class="node-type">HTTP Request v4</span></div>
+  <div class="node-purpose">Tells k8s-watcher to re-enumerate all cluster resources and publish them to Kafka</div>
+  <p><strong>URL:</strong> <code>POST http://k8s-watcher:8080/resync</code></p>
+  <p><strong>Behavior:</strong> Returns 202 Accepted immediately. Resync runs asynchronously in a background thread. Qdrant repopulates in ~30-45 seconds.</p>
+  <div class="screenshot"><img src="../screenshots/reset-node-04-trigger-resync.png" alt="Trigger Resync"><figcaption>POST to k8s-watcher resync endpoint</figcaption></div>
+</div>
+
+<div class="node-card code">
+  <div class="node-header"><span class="node-name">5. Format Response</span><span class="node-type">Code v2</span></div>
+  <div class="node-purpose">Returns a JSON status object as the webhook response</div>
+  <pre><code>{ "status": "ok", "message": "Qdrant collection cleared and resync triggered...", "reset_at": "2026-03-12T..." }</code></pre>
+  <div class="screenshot"><img src="../screenshots/reset-node-05-format-response.png" alt="Format Response"><figcaption>JSON response formatter</figcaption></div>
+</div>
+
+<div class="callout warn">
+  <div class="callout-title">After Reset: Wait 30-45 Seconds</div>
+  <p>Qdrant is empty immediately after reset while k8s-watcher republishes all resources. Do not run queries or E2E tests until <code>points_count &ge; 10</code>.</p>
+</div>
+</section>
+
+<!-- Section 9: Memory Clear -->
+<section id="memory-flow">
+<h2><span class="num">09</span> Workflow 4: Memory Clear</h2>
+
+<div class="callout info">
+  <div class="callout-title">Purpose</div>
+  <p>Clears chat conversation history from PostgreSQL. Runs automatically every hour and can be triggered manually. Prevents memory from growing unbounded and ensures fresh context.</p>
+</div>
+
+<p><strong>Workflow ID:</strong> <code>k8sMEMclear001</code></p>
+
+<div class="flow-diagram">
+<pre>
+<span class="flow-node">Manual Trigger</span> &mdash;&mdash;&mdash;+
+                       <span class="flow-arrow">|</span>
+<span class="flow-node">Schedule Trigger</span> &mdash;&mdash;+&mdash;&rarr; <span class="flow-node">Clear Memory</span> <span class="badge purple">Postgres</span>
+(every 1 hour)              DELETE FROM n8n_chat_histories
+</pre>
+</div>
+
+<div class="screenshot"><img src="../screenshots/17-memory-clear-workflow-canvas.png" alt="Memory Clear canvas"><figcaption>Memory_Clear_Flow with dual triggers</figcaption></div>
+
+<div class="grid-2">
+  <div class="screenshot"><img src="../screenshots/mem-node-01-manual-trigger.png" alt="Manual Trigger"><figcaption>Manual Trigger for on-demand clearing</figcaption></div>
+  <div class="screenshot"><img src="../screenshots/mem-node-02-schedule-trigger.png" alt="Schedule Trigger"><figcaption>Hourly schedule trigger</figcaption></div>
+</div>
+<div class="screenshot"><img src="../screenshots/mem-node-03-clear-memory.png" alt="Clear Memory"><figcaption>PostgreSQL DELETE query node</figcaption></div>
+</section>
+
+<!-- Section 10: AI Chat -->
+<section id="chat">
+<h2><span class="num">10</span> Using the AI Chat Interface</h2>
+
+<h3>Browser-Based Chat (No Login Required)</h3>
+<p>Open: <a href="http://localhost:30000/webhook/k8s-ai-chat/chat"><strong>http://localhost:30000/webhook/k8s-ai-chat/chat</strong></a></p>
+
+<div class="screenshot"><img src="../screenshots/09-ai-chat-public.png" alt="AI Chat page"><figcaption>Public AI chat interface &mdash; no login required</figcaption></div>
+
+<h3>Sending a Query</h3>
+<div class="screenshot"><img src="../screenshots/10-ai-chat-query-typed.png" alt="Query typed"><figcaption>Type any Kubernetes question</figcaption></div>
+
+<h3>Receiving a Response</h3>
+<div class="screenshot"><img src="../screenshots/11-ai-chat-response.png" alt="AI response"><figcaption>Clean markdown table response &mdash; no verbose explanations</figcaption></div>
+
+<h3 id="chat-examples">Query Examples</h3>
+<table>
+  <tr><th>Query</th><th>Tool Used</th><th>Expected Response Format</th></tr>
+  <tr><td>"How many pods are running?"</td><td><span class="badge orange">inventory</span></td><td>| Namespace | Pod Count |</td></tr>
+  <tr><td>"List all namespaces"</td><td><span class="badge orange">inventory</span></td><td>| Namespace | Resource Count |</td></tr>
+  <tr><td>"Show deployments per namespace"</td><td><span class="badge orange">inventory</span></td><td>| Namespace | Deployment | Replicas |</td></tr>
+  <tr><td>"Tell me about coredns deployment"</td><td><span class="badge purple">search</span></td><td>| Kind | Name | Namespace | Details |</td></tr>
+  <tr><td>"What secrets exist?"</td><td><span class="badge orange">inventory</span></td><td>| Kind | Name | Namespace | Type |</td></tr>
+  <tr><td>"Find services with kube-dns label"</td><td><span class="badge purple">search</span></td><td>| Kind | Name | Namespace | Labels |</td></tr>
+</table>
+
+<h3>curl-Based Queries</h3>
+<pre><code><span style="color:var(--text-dim)"># Count pods</span>
+curl -X POST http://localhost:30000/webhook/k8s-ai-chat/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"chatInput": "How many pods are in the cluster?"}'
+
+<span style="color:var(--text-dim)"># List deployments</span>
+curl -X POST http://localhost:30000/webhook/k8s-ai-chat/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"chatInput": "Show me all deployments and their replica counts"}'
+
+<span style="color:var(--text-dim)"># Secret query (values NEVER exposed)</span>
+curl -X POST http://localhost:30000/webhook/k8s-ai-chat/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"chatInput": "What secrets exist in the cluster?"}'</code></pre>
+
+<div class="callout success">
+  <div class="callout-title">Security: Secret Values Never Exposed</div>
+  <p>The system indexes Secret <strong>metadata only</strong> (name, type, key names). Base64-encoded values are discarded by k8s-watcher before publishing to Kafka. The AI can tell you "Secret X has keys: username, password" but can <strong>never</strong> reveal the actual values.</p>
+</div>
+</section>
+
+<!-- Section 11: Memory -->
+<section id="memory">
+<h2><span class="num">11</span> Chat Memory & Session Context</h2>
+
+<p>The AI maintains conversation context across queries. Ask "How many namespaces?" then follow up with "List them" &mdash; the AI remembers what "them" refers to.</p>
+
+<table>
+  <tr><th>Setting</th><th>Value</th></tr>
+  <tr><td>Session ID</td><td><code>k8s-ai-global</code> (shared across all users)</td></tr>
+  <tr><td>Context Window</td><td>5 (last 5 message pairs)</td></tr>
+  <tr><td>Storage</td><td>PostgreSQL: <code>n8n_memory.n8n_chat_histories</code></td></tr>
+  <tr><td>Auto-clear</td><td>Every hour (Memory_Clear_Flow)</td></tr>
+</table>
+
+<h3>Inspect Chat History</h3>
+<pre><code>psql -h localhost -p 30004 -U n8n -d n8n_memory \
+  -c "SELECT session_id, message->>'type' AS type, left(message->>'data', 80) AS preview FROM n8n_chat_histories ORDER BY id DESC LIMIT 10;"
+<span style="color:var(--text-dim)"># Password: n8n_memory</span></code></pre>
+
+<h3>Manual Clear</h3>
+<pre><code>psql -h localhost -p 30004 -U n8n -d n8n_memory \
+  -c "DELETE FROM n8n_chat_histories;"</code></pre>
+</section>
+
+<!-- Section 12: Qdrant -->
+<section id="qdrant">
+<h2><span class="num">12</span> Qdrant Vector Database</h2>
+
+<p><strong>Dashboard:</strong> <a href="http://localhost:30001/dashboard">http://localhost:30001/dashboard</a></p>
+
+<table>
+  <tr><th>Property</th><th>Value</th></tr>
+  <tr><td>Collection</td><td><code>k8s</code></td></tr>
+  <tr><td>Dimensions</td><td>768</td></tr>
+  <tr><td>Distance</td><td>Cosine</td></tr>
+  <tr><td>Embedding model</td><td><code>nomic-embed-text:latest</code></td></tr>
+  <tr><td>Score threshold</td><td>0.3</td></tr>
+  <tr><td>Typical points</td><td>60-80</td></tr>
+</table>
+
+<h3>Useful Commands</h3>
+<pre><code><span style="color:var(--text-dim)"># Point count</span>
+curl -s http://localhost:30001/collections/k8s | python3 -c \
+  "import sys,json; print('Points:', json.load(sys.stdin)['result']['points_count'])"
+
+<span style="color:var(--text-dim)"># Browse first 5 points</span>
+curl -s http://localhost:30001/collections/k8s/points/scroll \
+  -H 'Content-Type: application/json' \
+  -d '{"limit":5,"with_payload":true,"with_vector":false}' | python3 -m json.tool
+
+<span style="color:var(--text-dim)"># Filter by kind</span>
+curl -s http://localhost:30001/collections/k8s/points/scroll \
+  -H 'Content-Type: application/json' \
+  -d '{"filter":{"must":[{"key":"metadata.kind","match":{"value":"Deployment"}}]},"limit":20,"with_payload":true,"with_vector":false}' | python3 -m json.tool</code></pre>
+
+<h3>Qdrant Point Structure</h3>
+<pre><code>{
+  "id": "abc-123-def",            <span style="color:var(--text-dim)">// resource_uid from Kubernetes</span>
+  "vector": [0.123, -0.456, ...], <span style="color:var(--text-dim)">// 768 floats from nomic-embed-text</span>
+  "payload": {
+    "pageContent": "Kubernetes Deployment named coredns in namespace kube-system...",
+    "metadata": {
+      "resource_uid": "abc-123-def",
+      "kind": "Deployment",
+      "namespace": "kube-system",
+      "name": "coredns",
+      "labels": "{\"k8s-app\":\"kube-dns\"}",
+      "annotations": "{}",
+      "spec_summary": "replicas=2; containers=[coredns:registry.k8s.io/coredns/coredns:v1.11.1]",
+      "last_updated_timestamp": "2026-03-12T..."
+    }
+  }
+}</code></pre>
+</section>
+
+<!-- Section 13: pgAdmin -->
+<section id="pgadmin">
+<h2><span class="num">13</span> pgAdmin: Database Browser</h2>
+
+<div class="cred-box">
+  <h4>pgAdmin Login</h4>
+  <p>URL: <a href="http://localhost:30003">http://localhost:30003</a></p>
+  <p>Email: <code>admin@example.com</code> &nbsp;|&nbsp; Password: <code>admin</code></p>
+</div>
+
+<div class="screenshot"><img src="../screenshots/18-pgadmin-login.png" alt="pgAdmin login"><figcaption>pgAdmin login page at localhost:30003</figcaption></div>
+
+<h3>Navigation Path</h3>
+<p>Servers &rarr; k8s-ai Postgres &rarr; Databases &rarr; n8n_memory &rarr; Schemas &rarr; public &rarr; Tables &rarr; <code>n8n_chat_histories</code></p>
+</section>
+
+<!-- Section 14: Tests -->
+<section id="tests">
+<h2><span class="num">14</span> Running E2E Tests</h2>
+
+<h3>Full Suite (15 Tests)</h3>
+<pre><code>npm test</code></pre>
+
+<h3>Single Test</h3>
+<pre><code>npm run test:single "create namespace"    <span style="color:var(--text-dim)"># Test 1</span>
+npm run test:single "deployment query"    <span style="color:var(--text-dim)"># Test 8</span>
+npm run test:single "pod counts"          <span style="color:var(--text-dim)"># Test 13</span></code></pre>
+
+<h3>Test Groups</h3>
+<table>
+  <tr><th>Group</th><th>Tests</th><th>What They Validate</th><th>Dependencies</th></tr>
+  <tr><td><span class="badge green">CDC</span></td><td>1-3, 6</td><td>Create/update/delete &rarr; Kafka &rarr; Qdrant</td><td>Kafka, Qdrant, Ollama (embed only)</td></tr>
+  <tr><td><span class="badge blue">Direct AI</span></td><td>4, 7</td><td>Ollama + Qdrant without n8n Agent</td><td>Qdrant, Ollama</td></tr>
+  <tr><td><span class="badge purple">AI Agent</span></td><td>8-10</td><td>Full pipeline via live webhook</td><td>All services + active AI workflow</td></tr>
+  <tr><td><span class="badge orange">Memory</span></td><td>11-12</td><td>Session context + clearing</td><td>Postgres + active AI workflow</td></tr>
+  <tr><td><span class="badge green">Accuracy</span></td><td>13-15</td><td>AI output vs real kubectl results</td><td>All services + active AI workflow</td></tr>
+  <tr><td><span class="badge orange">Reset</span></td><td>5</td><td>Qdrant wipe + resync</td><td>All services + active Reset workflow</td></tr>
+</table>
+
+<div class="callout info">
+  <div class="callout-title">Test 5 runs LAST</div>
+  <p>Despite being numbered 5, the Reset test is declared last in the spec file. Reset wipes Qdrant, so it must execute after all other tests that depend on existing data.</p>
+</div>
+
+<h3>Expected Output</h3>
+<pre><code>  ✓  1  CDC: create namespace → Kafka event + Qdrant insertion       (2.9s)
+  ✓  2  CDC: update deployment → old vector replaced                  (2.0s)
+  ✓  3  CDC: delete resource → point removed from Qdrant              (32ms)
+  ✓  4  AI: namespace count → markdown table response                 (3.4s)
+  ✓  6  CDC: create secret → safe metadata only                      (2.9s)
+  ✓  7  AI: secrets query → values never exposed                     (1.1s)
+  ✓  8  AI Agent: deployment query via Qdrant tool                   (26.5s)
+  ✓  9  AI Agent: namespace query via Qdrant tool                     (4.7s)
+  ✓ 10  AI Agent: secrets query, values never exposed                (16.4s)
+  ✓ 11  Memory: consecutive queries share context                    (31.4s)
+  ✓ 12  Memory: clear removes all chat history                       (451ms)
+  ✓ 13  Accuracy: pod counts match kubectl                           (...)
+  ✓ 14  Accuracy: deployment list matches kubectl                    (...)
+  ✓ 15  Accuracy: namespace list matches kubectl                     (...)
+  ✓  5  Reset: Qdrant cleared + resync repopulates                   (3.4s)
+
+  15 passed</code></pre>
+</section>
+
+<!-- Section 15: API Reference -->
+<section id="api">
+<h2><span class="num">15</span> API Reference</h2>
+
+<h3>AI Chat</h3>
+<pre><code>curl -X POST http://localhost:30000/webhook/k8s-ai-chat/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"chatInput": "Show me all deployments"}'</code></pre>
+
+<h3>Reset & Resync</h3>
+<pre><code>curl -X POST http://localhost:30000/webhook/k8s-reset \
+  -H 'Content-Type: application/json' -d '{}'</code></pre>
+
+<h3>Ollama Direct Chat</h3>
+<pre><code>curl http://localhost:11434/api/chat -d '{
+  "model": "qwen3:14b-k8s",
+  "messages": [{"role":"user","content":"List namespaces"}],
+  "stream": false, "think": false
+}' | python3 -c "import sys,json; print(json.load(sys.stdin)['message']['content'])"</code></pre>
+
+<h3>Ollama Embedding</h3>
+<pre><code>curl http://localhost:11434/api/embed -d '{
+  "model": "nomic-embed-text",
+  "input": "Kubernetes Deployment named coredns"
+}' | python3 -c "import sys,json; e=json.load(sys.stdin)['embeddings'][0]; print(f'Dims: {len(e)}')"</code></pre>
+
+<h3>Kafka Messages</h3>
+<pre><code><span style="color:var(--text-dim)"># List topics</span>
+kubectl --context kind-k8s-ai -n k8s-ai exec kafka-0 -- \
+  /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+
+<span style="color:var(--text-dim)"># Read latest 3 messages</span>
+kubectl --context kind-k8s-ai -n k8s-ai exec kafka-0 -- \
+  /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+  --topic k8s-resources --from-beginning --max-messages 3</code></pre>
+</section>
+
+<!-- Section 16: Ollama -->
+<section id="ollama">
+<h2><span class="num">16</span> Ollama Model Management</h2>
+
+<pre><code><span style="color:var(--text-dim)"># List models</span>
+ollama list
+
+<span style="color:var(--text-dim)"># Inspect custom model</span>
+ollama show qwen3:14b-k8s --modelfile
+ollama show qwen3:14b-k8s --system
+ollama show qwen3:14b-k8s --parameters
+
+<span style="color:var(--text-dim)"># Rebuild after editing Modelfile</span>
+ollama create qwen3:14b-k8s -f models/Modelfile.k8s
+
+<span style="color:var(--text-dim)"># Interactive chat</span>
+ollama run qwen3:14b-k8s</code></pre>
+
+<p>For the full model customization guide: <a href="index.html">Ollama Model Customization Guide (HTML)</a></p>
+</section>
+
+<!-- Section 17: k8s-watcher -->
+<section id="watcher">
+<h2><span class="num">17</span> k8s-watcher: Kubernetes API Monitor</h2>
+
+<p>A Python service running as a pod in the <code>k8s-ai</code> namespace. Watches the Kubernetes API for changes to 10 resource types and publishes events to Kafka.</p>
+
+<h3>Health Check</h3>
+<pre><code>curl http://localhost:30002/healthz
+<span style="color:var(--text-dim)"># {"status":"ok"}</span></code></pre>
+
+<h3 id="watcher-resources">Watched Resource Types (10)</h3>
+<table>
+  <tr><th>#</th><th>Resource</th><th>Scope</th><th>K8s API</th></tr>
+  <tr><td>1</td><td>Namespace</td><td>Cluster</td><td><code>v1.list_namespace</code></td></tr>
+  <tr><td>2</td><td>Pod</td><td>Namespaced</td><td><code>v1.list_pod_for_all_namespaces</code></td></tr>
+  <tr><td>3</td><td>Service</td><td>Namespaced</td><td><code>v1.list_service_for_all_namespaces</code></td></tr>
+  <tr><td>4</td><td>ConfigMap</td><td>Namespaced</td><td><code>v1.list_config_map_for_all_namespaces</code></td></tr>
+  <tr><td>5</td><td>PVC</td><td>Namespaced</td><td><code>v1.list_persistent_volume_claim_for_all_namespaces</code></td></tr>
+  <tr><td>6</td><td>Secret</td><td>Namespaced</td><td><code>v1.list_secret_for_all_namespaces</code></td></tr>
+  <tr><td>7</td><td>Deployment</td><td>Namespaced</td><td><code>apps.list_deployment_for_all_namespaces</code></td></tr>
+  <tr><td>8</td><td>ReplicaSet</td><td>Namespaced</td><td><code>apps.list_replica_set_for_all_namespaces</code></td></tr>
+  <tr><td>9</td><td>StatefulSet</td><td>Namespaced</td><td><code>apps.list_stateful_set_for_all_namespaces</code></td></tr>
+  <tr><td>10</td><td>DaemonSet</td><td>Namespaced</td><td><code>apps.list_daemon_set_for_all_namespaces</code></td></tr>
+</table>
+
+<h3>Event Payload Format</h3>
+<pre><code>{
+  "event_type": "ADDED|MODIFIED|DELETED",
+  "resource_uid": "abc-123",
+  "kind": "Deployment",
+  "namespace": "kube-system",
+  "name": "coredns",
+  "labels": {"k8s-app": "kube-dns"},
+  "annotations": {},
+  "raw_spec_json": "{...}",
+  "embed_text": "Kubernetes Deployment named coredns in namespace kube-system. Labels: k8s-app=kube-dns. Spec: ...",
+  "last_updated_timestamp": "2026-03-12T..."
+}</code></pre>
+
+<h3 id="watcher-secrets">Secret Safety</h3>
+<div class="callout success">
+  <div class="callout-title">Secret Values Never Leave the Cluster</div>
+  <p>When <code>kind == "Secret"</code>, the watcher replaces the spec with <code>{"type": "Opaque", "dataKeys": ["username", "password"]}</code>. The base64-encoded values in <code>raw["data"]</code> are <strong>discarded</strong>. This applies to both watch events and resync.</p>
+</div>
+
+<h3>Customization: Adding New Resource Types</h3>
+<p>To watch additional resources (e.g., Ingress, CronJob), edit <code>k8s-watcher/watcher.py</code>:</p>
+<ol>
+  <li>Add a new watch thread in the <code>main()</code> function</li>
+  <li>Add the list function to <code>resync_all()</code></li>
+  <li>Rebuild: <code>docker build -t k8s-watcher:latest ./k8s-watcher/ && kind load docker-image k8s-watcher:latest --name k8s-ai</code></li>
+  <li>Restart: <code>kubectl -n k8s-ai rollout restart deployment/k8s-watcher</code></li>
+</ol>
+</section>
+
+<!-- Section 18: Operations -->
+<section id="ops">
+<h2><span class="num">18</span> Common Operations & Maintenance</h2>
+
+<h3>After Docker Desktop Restart</h3>
+<pre><code><span style="color:var(--text-dim)"># Pods auto-restart (wait ~30s). Verify:</span>
+kubectl --context kind-k8s-ai -n k8s-ai get pods</code></pre>
+
+<h3>Re-Import Workflows</h3>
+<pre><code>./scripts/setup.sh --keep-cluster --no-test</code></pre>
+
+<h3>Rebuild k8s-watcher</h3>
+<pre><code>docker build -t k8s-watcher:latest ./k8s-watcher/
+kind load docker-image k8s-watcher:latest --name k8s-ai
+kubectl --context kind-k8s-ai -n k8s-ai rollout restart deployment/k8s-watcher</code></pre>
+
+<h3>View Pod Logs</h3>
+<pre><code>kubectl --context kind-k8s-ai -n k8s-ai logs -f deployment/k8s-watcher
+kubectl --context kind-k8s-ai -n k8s-ai logs -f deployment/n8n
+kubectl --context kind-k8s-ai -n k8s-ai logs -f kafka-0</code></pre>
+
+<h3>Capture Screenshots</h3>
+<pre><code>N8N_EMAIL=assaduzzaman.ict@gmail.com N8N_PASS='********' npm run screenshots</code></pre>
+
+<h3>Full Teardown</h3>
+<pre><code>./scripts/cleanup.sh                    <span style="color:var(--text-dim)"># keep data/</span>
+./scripts/cleanup.sh --wipe-data --yes  <span style="color:var(--text-dim)"># delete everything</span></code></pre>
+</section>
+
+<!-- Section 19: Troubleshooting -->
+<section id="troubleshooting">
+<h2><span class="num">19</span> Troubleshooting</h2>
+
+<table>
+  <tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr>
+  <tr><td>Webhook returns 404</td><td>Workflows inactive</td><td><code>./scripts/setup.sh --keep-cluster --no-test</code></td></tr>
+  <tr><td>Qdrant has 0 points</td><td>Reset just triggered</td><td>Wait 30-45s for repopulation</td></tr>
+  <tr><td>AI says "No results"</td><td>Qdrant empty or Ollama down</td><td>Check point count + <code>ollama list</code></td></tr>
+  <tr><td>Tests 8-10 fail with 404</td><td>AI workflow inactive</td><td>Reimport workflows</td></tr>
+  <tr><td>Tests 13-15 accuracy mismatch</td><td>Stale Qdrant data</td><td><code>curl -X POST http://localhost:30000/webhook/k8s-reset -d '{}'</code></td></tr>
+  <tr><td>Port 30000 in use</td><td>Other kind cluster running</td><td><code>docker ps | grep 30000</code> then stop it</td></tr>
+  <tr><td>Ollama ECONNREFUSED from pods</td><td>Ollama not running on host</td><td><code>ollama serve &</code></td></tr>
+  <tr><td>SQLITE_CORRUPT in n8n logs</td><td>Concurrent sqlite3 writes</td><td><code>./scripts/cleanup.sh --wipe-data && ./scripts/setup.sh</code></td></tr>
+  <tr><td>Pods not starting</td><td>Manifests not applied</td><td><code>kubectl apply -f infra/k8s/</code></td></tr>
+  <tr><td>k8s-watcher CrashLoopBackOff</td><td>Image not loaded into kind</td><td><code>kind load docker-image k8s-watcher:latest --name k8s-ai</code></td></tr>
+</table>
+</section>
+
+</main>
+
+<footer>
+  <p>Kubernetes AI Knowledge System &mdash; User Manual v2.0 &mdash; Generated 2026-03-12</p>
+  <p>Related: <a href="index.html">Ollama Model Customization Guide</a> &nbsp;|&nbsp; <a href="../user-manual.md">Markdown Version</a> &nbsp;|&nbsp; <a href="../manual-test.md">Manual Test Guide</a></p>
+</footer>
+
+<script>
+// Active nav highlighting on scroll
+const sections = document.querySelectorAll('section');
+const navLinks = document.querySelectorAll('nav a');
+window.addEventListener('scroll', () => {
+  let current = '';
+  sections.forEach(s => { if (window.scrollY >= s.offsetTop - 100) current = s.id; });
+  navLinks.forEach(a => {
+    a.classList.remove('active');
+    if (a.getAttribute('href') === '#' + current) a.classList.add('active');
+  });
+});
+</script>
+</body>
+</html>
