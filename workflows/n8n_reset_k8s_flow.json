@@ -34,7 +34,9 @@
       "parameters": {
         "method": "DELETE",
         "url": "http://qdrant:6333/collections/k8s",
-        "options": {}
+        "options": {
+          "timeout": 10000
+        }
       },
       "id": "delete-collection",
       "name": "Delete Qdrant Collection",
@@ -43,7 +45,11 @@
       "position": [
         400,
         300
-      ]
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
@@ -52,7 +58,9 @@
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={ \"vectors\": { \"size\": 768, \"distance\": \"Cosine\" }, \"optimizers_config\": { \"default_segment_number\": 2 }, \"replication_factor\": 1 }",
-        "options": {}
+        "options": {
+          "timeout": 10000
+        }
       },
       "id": "recreate-collection",
       "name": "Recreate Qdrant Collection",
@@ -61,13 +69,18 @@
       "position": [
         620,
         300
-      ]
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
     },
     {
       "parameters": {
         "method": "POST",
         "url": "http://k8s-watcher:8080/resync",
-        "options": {}
+        "options": {
+          "timeout": 15000
+        }
       },
       "id": "trigger-resync",
       "name": "Trigger Resync",
@@ -76,11 +89,14 @@
       "position": [
         840,
         300
-      ]
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
     },
     {
       "parameters": {
-        "jsCode": "const ts = new Date().toISOString();\nreturn [{ json: { status: 'ok', message: 'Qdrant collection cleared and k8s-watcher resync triggered. Vector database will repopulate within ~30 seconds.', reset_at: ts } }];"
+        "jsCode": "const ts = new Date().toISOString();\nconst resyncResult = $('Trigger Resync').first().json;\nreturn [{ json: {\n  status: 'ok',\n  message: 'Qdrant collection cleared and k8s-watcher resync triggered. Vector database will repopulate within ~30 seconds.',\n  reset_at: ts,\n  resync_response: resyncResult?.status || 'triggered'\n} }];"
       },
       "id": "format-reset-response",
       "name": "Format Response",

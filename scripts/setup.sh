@@ -64,7 +64,9 @@ get_n8n_pod() {
 n8n_exec() {
   local pod
   pod="$(get_n8n_pod)"
-  kubectl --context "${CONTEXT}" -n "${NAMESPACE}" exec "${pod}" -- "$@"
+  # Run as user 'node' so the CLI uses /home/node/.n8n (same DB as the server).
+  # The container runs as root but the n8n server drops to uid 1000 (node).
+  kubectl --context "${CONTEXT}" -n "${NAMESPACE}" exec "${pod}" -- su -s /bin/sh node -c "$*"
 }
 
 qdrant_points() {

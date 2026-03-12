@@ -28,7 +28,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// The Kafka trigger delivers the raw message string in .message\nconst raw = $input.first().json;\nlet data;\ntry {\n  data = typeof raw.message === 'string' ? JSON.parse(raw.message) : raw;\n} catch (_) {\n  data = raw;\n}\n\n// Use embed_text from watcher if present; build one otherwise\nlet embed_text = data.embed_text;\nif (!embed_text) {\n  const scope = data.namespace ? `in namespace ${data.namespace}` : 'cluster-scoped';\n  const labels = Object.entries(data.labels || {}).slice(0,5).map(([k,v])=>`${k}=${v}`).join(', ') || 'none';\n  embed_text = `Kubernetes ${data.kind} named ${data.name} ${scope}. Labels: ${labels}. Spec: ${(data.raw_spec_json||'{}').substring(0,600)}`;\n}\n\nreturn [{ json: { ...data, embed_text } }];"
+        "jsCode": "// The Kafka trigger delivers the raw message string in .message\nconst raw = $input.first().json;\nlet data;\ntry {\n  data = typeof raw.message === 'string' ? JSON.parse(raw.message) : raw;\n} catch (_) {\n  data = raw;\n}\n\n// Use embed_text from watcher if present; build one otherwise\nlet embed_text = data.embed_text;\nif (!embed_text) {\n  const scope = data.namespace ? `in namespace ${data.namespace}` : 'cluster-scoped';\n  const labels = Object.entries(data.labels || {}).slice(0,5).map(([k,v])=>`${k}=${v}`).join(', ') || 'none';\n  embed_text = `Kubernetes ${data.kind} named ${data.name} ${scope}. Labels: ${labels}. Spec: ${(data.raw_spec_json||'{}').substring(0,600)}`;\n}\n\n// Validate required fields\nif (!data.resource_uid || !data.kind || !data.name) {\n  console.error(`CDC_SKIP: Missing required fields: uid=${data.resource_uid}, kind=${data.kind}, name=${data.name}`);\n  return [];\n}\n\nreturn [{ json: { ...data, embed_text } }];"
       },
       "id": "parse-message",
       "name": "Parse Message",
@@ -46,7 +46,9 @@
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ filter: { must: [{ key: 'metadata.resource_uid', match: { value: $('Parse Message').first().json.resource_uid } }] } }) }}",
-        "options": {}
+        "options": {
+          "timeout": 10000
+        }
       },
       "id": "delete-vector",
       "name": "Delete Existing Vector",
@@ -55,7 +57,11 @@
       "position": [
         860,
         180
-      ]
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000,
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
@@ -123,7 +129,8 @@
       ],
       "retryOnFail": true,
       "maxTries": 3,
-      "waitBetweenTries": 2000
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
@@ -133,6 +140,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ points: [{ id: $('Format Document').first().json.metadata.resource_uid, vector: $json.embedding, payload: { pageContent: $('Format Document').first().json.pageContent, metadata: $('Format Document').first().json.metadata } }] }) }}",
         "options": {
+          "batching": { "batch": { "batchSize": 1, "batchInterval": 500 } },
           "timeout": 10000
         }
       },
@@ -146,7 +154,21 @@
       ],
       "retryOnFail": true,
       "maxTries": 3,
-      "waitBetweenTries": 2000
+      "waitBetweenTries": 2000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nfor (const item of items) {\n  const error = item.json?.error || item.json?.message || 'Unknown error';\n  const src = $('Parse Message').first().json;\n  console.error(`CDC_ERROR: Failed to process ${src.kind || '?'}/${src.name || '?'} (uid=${src.resource_uid || '?'}): ${error}`);\n}\nreturn items;"
+      },
+      "id": "log-cdc-error",
+      "name": "Log CDC Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        600
+      ]
     }
   ],
   "connections": {
@@ -206,6 +228,25 @@
         [
           {
             "node": "Upsert to Qdrant",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log CDC Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert to Qdrant": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Log CDC Error",
             "type": "main",
             "index": 0
           }
