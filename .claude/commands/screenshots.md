@@ -4,27 +4,30 @@ Capture all UI screenshots for the Kubernetes AI Knowledge System documentation.
 
 1. Verify n8n is running and healthy:
    ```bash
-   curl -s http://localhost:5678/healthz
+   curl -s http://localhost:30000/healthz
    ```
 
-2. Run the screenshot capture script:
+2. Verify all pods are running:
+   ```bash
+   kubectl --context kind-k8s-ai -n k8s-ai get pods
+   ```
+   Expected: 6 pods Running (kafka-0, qdrant, k8s-watcher, n8n, postgres, pgadmin).
+
+3. Run the screenshot capture script:
    ```bash
    npm run screenshots
    ```
    This script:
-   - Temporarily disables N8N_BASIC_AUTH_ACTIVE via docker-compose.override.yml
-   - Restarts n8n without basic auth
    - Launches headless Chromium (1440×900)
-   - Navigates through all UI pages: sign-in, dashboard, CDC canvas, CDC executions, AI canvas, public chat, reset canvas, settings
-   - Saves 17 screenshots to docs/screenshots/
-   - Restores basic auth and restarts n8n
+   - Navigates through all UI pages: sign-in, dashboard, workflow canvases, executions, public chat, settings
+   - Saves screenshots to docs/screenshots/
 
-3. List the captured screenshots:
+4. List the captured screenshots:
    ```bash
    ls docs/screenshots/*.png
    ```
 
-4. Report which screenshots were saved and flag any that are missing (expected files):
+5. Report which screenshots were saved and flag any that are missing (expected files):
    - 01-signin-page.png
    - 02-signin-credentials-filled.png
    - 03-workflow-dashboard.png
@@ -41,4 +44,7 @@ Capture all UI screenshots for the Kubernetes AI Knowledge System documentation.
    - 16-reset-workflow-executions.png
    - 17-settings-api.png
 
-If any screenshots are missing, check `docker logs kind_vector_n8n-n8n-1 --tail 20` and `docker logs kind_vector_n8n-k8s-watcher-1 --tail 10` for issues.
+If any screenshots are missing, check n8n pod logs:
+```bash
+kubectl --context kind-k8s-ai -n k8s-ai logs deployment/n8n --tail 20
+```

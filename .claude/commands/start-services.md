@@ -16,7 +16,7 @@ Start all Kubernetes services for the Kubernetes AI Knowledge System and verify 
    ```bash
    kubectl --context kind-k8s-ai -n k8s-ai get pods
    ```
-   Expected: all 4 pods (kafka-0, qdrant-*, k8s-watcher-*, n8n-*) in Running state.
+   Expected: all 6 pods (kafka-0, qdrant-*, k8s-watcher-*, n8n-*, postgres-*, pgadmin-*) in Running state.
 
 3. Verify each critical service:
 
@@ -50,6 +50,17 @@ Start all Kubernetes services for the Kubernetes AI Knowledge System and verify 
      --bootstrap-server localhost:9092 --topic k8s-resources
    ```
 
+   **Postgres:**
+   ```bash
+   psql -h localhost -p 30004 -U n8n -d n8n_memory -c "SELECT 1" 2>/dev/null || echo "Postgres not reachable via NodePort"
+   ```
+
+   **pgAdmin:**
+   ```bash
+   curl -s -o /dev/null -w "%{http_code}" http://localhost:30003
+   ```
+   Expected: 200
+
 4. Verify kind cluster is reachable:
    ```bash
    kubectl --context kind-k8s-ai get nodes
@@ -67,18 +78,23 @@ Start all Kubernetes services for the Kubernetes AI Knowledge System and verify 
    ```bash
    ollama list
    ```
-   Required: `nomic-embed-text` and `qwen3:8b`. If missing:
+   Required: `nomic-embed-text` and `qwen3:14b-k8s`. If missing:
    ```bash
    ollama pull nomic-embed-text
-   ollama pull qwen3:8b
+   ollama pull qwen3:14b-k8s
+   ```
+   If `qwen3:14b-k8s` is not built yet:
+   ```bash
+   ollama pull qwen3:14b
+   ollama create qwen3:14b-k8s -f models/Modelfile.k8s
    ```
 
-7. Check that n8n workflows are active:
+7. Check that n8n workflows are active (webhook-based check — `n8n list:workflow` does not show active flag):
    ```bash
-   N8N_POD=$(kubectl --context kind-k8s-ai -n k8s-ai get pod -l app=n8n -o jsonpath='{.items[0].metadata.name}')
-   kubectl --context kind-k8s-ai -n k8s-ai exec ${N8N_POD} -- n8n list:workflow
+   curl -s -o /dev/null -w "AI chat: %{http_code}\n" http://localhost:30000/webhook/k8s-ai-chat/chat
+   curl -s -o /dev/null -w "Reset:   %{http_code}\n" -X POST http://localhost:30000/webhook/k8s-reset -H 'Content-Type: application/json' -d '{}'
    ```
-   All three workflows (CDC_K8s_Flow, AI_K8s_Flow, Reset_K8s_Flow) should be present.
+   All 4 workflows (CDC_K8s_Flow, AI_K8s_Flow, Reset_K8s_Flow, Memory_Clear_Flow) should be present.
    If webhooks return 404, run `/reimport-workflows`.
 
 8. If Qdrant has 0 points, trigger initial sync:

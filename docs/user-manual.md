@@ -30,6 +30,7 @@ A complete visual guide to setting up, operating, testing, and utilizing the Kub
 16. [Ollama Model Management](#16-ollama-model-management)
 17. [Common Operations & Maintenance](#17-common-operations--maintenance)
 18. [Troubleshooting](#18-troubleshooting)
+19. [Claude Code Skills (Slash Commands)](#19-claude-code-skills-slash-commands)
 
 ---
 
@@ -58,13 +59,106 @@ A complete visual guide to setting up, operating, testing, and utilizing the Kub
 | **pgAdmin** | `admin@example.com` | `admin` |
 | **Postgres** | `n8n` | `n8n_memory` |
 
-### Domain-Based Access (Optional)
+### Domain-Based Access & Remote Machine Setup
 
-Add to `/etc/hosts`:
+The n8n deployment is pre-configured with `WEBHOOK_URL=http://n8n.genai.prod:30000/` and `N8N_HOST=n8n.genai.prod` (see `infra/k8s/n8n/n8n-deployment.yaml`). This means **webhook callbacks and the n8n editor UI resolve to `n8n.genai.prod`**, not `localhost`. For this to work — both on the host machine and on any remote machine — you must configure `/etc/hosts`.
+
+#### On the Host Machine (where kind cluster runs)
+
+Edit `/etc/hosts` (requires `sudo`):
+```bash
+sudo nano /etc/hosts
+# or
+sudo vi /etc/hosts
+```
+
+Add this line (use the host machine's LAN IP — `192.168.1.154` in this project):
 ```
 192.168.1.154 n8n.genai.prod
 ```
-Then access n8n at: http://n8n.genai.prod:30000
+
+After saving, verify:
+```bash
+ping -c 1 n8n.genai.prod
+# should resolve to 192.168.1.154
+```
+
+Now you can access all services using the domain:
+
+| Service | Domain URL |
+|---------|-----------|
+| **n8n Dashboard** | http://n8n.genai.prod:30000 |
+| **AI Chat** (public) | http://n8n.genai.prod:30000/webhook/k8s-ai-chat/chat |
+| **Qdrant** | http://n8n.genai.prod:30001/dashboard |
+| **pgAdmin** | http://n8n.genai.prod:30003 |
+| **k8s-watcher** | http://n8n.genai.prod:30002/healthz |
+
+#### On a Remote Machine (accessing over the LAN)
+
+Any machine on the same network can access the system. On the remote machine:
+
+1. **Add the `/etc/hosts` entry** (same as above):
+   ```bash
+   # Linux / macOS:
+   sudo sh -c 'echo "192.168.1.154 n8n.genai.prod" >> /etc/hosts'
+
+   # Windows (run PowerShell as Administrator):
+   Add-Content -Path C:\Windows\System32\drivers\etc\hosts -Value "192.168.1.154 n8n.genai.prod"
+   ```
+
+2. **Verify connectivity** — the host machine's firewall must allow inbound connections on ports 30000–30004:
+   ```bash
+   # From the remote machine:
+   curl -s http://n8n.genai.prod:30000/healthz
+   # Expected: {"status":"ok"}
+
+   # Test AI chat:
+   curl -X POST http://n8n.genai.prod:30000/webhook/k8s-ai-chat/chat \
+     -H 'Content-Type: application/json' \
+     -d '{"chatInput": "How many pods are running?"}'
+   ```
+
+3. **macOS firewall note:** If the remote machine can't connect, check System Settings → Network → Firewall. Either disable the firewall or add exceptions for ports 30000–30004. Docker Desktop's port forwarding binds to `0.0.0.0` by default, so the ports are exposed on all interfaces.
+
+#### Why Domain-Based Access Matters
+
+The n8n deployment configures three environment variables that reference `n8n.genai.prod`:
+
+| Env Variable | Value | Purpose |
+|-------------|-------|---------|
+| `WEBHOOK_URL` | `http://n8n.genai.prod:30000/` | Base URL for all webhook callbacks (AI chat, Reset) |
+| `N8N_HOST` | `n8n.genai.prod` | Hostname used in n8n's internal URL generation |
+| `N8N_EDITOR_BASE_URL` | `http://n8n.genai.prod:30000/` | URL shown in the browser address bar |
+
+Without the `/etc/hosts` entry:
+- The n8n editor UI loads but internal links may fail to resolve
+- Webhook URLs returned by n8n will contain `n8n.genai.prod` which won't resolve
+- The AI chat public URL won't work from other machines
+
+> **Customizing the IP:** If your host machine has a different LAN IP (e.g., `10.0.0.50`), update both `/etc/hosts` **and** the `hostAliases` section in `infra/k8s/n8n/n8n-deployment.yaml` (line 17: `ip: "192.168.1.154"` → your IP). The `hostAliases` entry is how pods inside kind resolve `host.docker.internal` to reach Ollama on the host.
+
+#### Changing the Domain Name
+
+If you want to use a different domain (e.g., `k8s-ai.local`):
+
+1. Update `infra/k8s/n8n/n8n-deployment.yaml`:
+   ```yaml
+   - name: WEBHOOK_URL
+     value: "http://k8s-ai.local:30000/"
+   - name: N8N_HOST
+     value: "k8s-ai.local"
+   - name: N8N_EDITOR_BASE_URL
+     value: "http://k8s-ai.local:30000/"
+   ```
+2. Update `/etc/hosts` on all machines:
+   ```
+   192.168.1.154 k8s-ai.local
+   ```
+3. Redeploy n8n:
+   ```bash
+   kubectl --context kind-k8s-ai apply -f infra/k8s/n8n/
+   kubectl --context kind-k8s-ai -n k8s-ai rollout restart deployment/n8n
+   ```
 
 ### NodePort Assignments
 
@@ -1260,6 +1354,140 @@ ollama serve &
 ./scripts/cleanup.sh --wipe-data --yes
 ./scripts/setup.sh
 ```
+
+---
+
+## 19. Claude Code Skills (Slash Commands)
+
+This project includes 7 custom slash commands (skills) for Claude Code that automate common operations. Skills are stored in `.claude/commands/` and invoked by typing `/<skill-name>` in the Claude Code CLI.
+
+### Overview
+
+| Command | Purpose | When to Use |
+|---------|---------|-------------|
+| `/resume` | Session-start brief with system state and next steps | Beginning of every new Claude Code session |
+| `/status` | Full health check of all 11 components | After Docker restart, suspected issues, or periodic monitoring |
+| `/start-services` | Apply k8s manifests and verify all pods are healthy | After cluster creation or pod failures |
+| `/reimport-workflows` | Reimport + reactivate all 4 n8n workflows from JSON | After editing workflow JSON files or fresh n8n pod |
+| `/reset-db` | Wipe Qdrant and trigger CDC resync via k8s-watcher | When Qdrant data is stale or tests need clean state |
+| `/test` | Run all 15 E2E tests with prerequisite checks | After code changes, workflow edits, or deployment |
+| `/screenshots` | Capture all UI screenshots to docs/screenshots/ | After UI changes or for documentation updates |
+
+### Skill Details
+
+#### `/resume` — Session Start Brief
+
+Reads project context and reports:
+- What phases are complete (from `docs/plans/`)
+- Current system state: pods (6), Qdrant points, workflow webhooks, Ollama models
+- Static workflow IDs for quick reference
+- Quick commands for common operations
+- Suggested next steps from the plans
+
+**Best practice:** Run this at the start of every Claude Code session to orient yourself.
+
+#### `/status` — Full Health Check
+
+Checks all 11 components in parallel:
+
+| Check | Method | Expected |
+|-------|--------|----------|
+| k8s pods (6) | `kubectl get pods` | All Running |
+| Qdrant | `curl localhost:30001/collections/k8s` | points_count > 0, status green |
+| Kafka | `kafka-get-offsets` via kubectl exec | Topic offset present |
+| k8s-watcher | `curl localhost:30002/healthz` | `{"status":"ok"}` |
+| Ollama | `curl localhost:11434/api/tags` | nomic-embed-text + qwen3:14b-k8s |
+| kind cluster | `kubectl get nodes` | Ready |
+| n8n AI webhook | `curl localhost:30000/webhook/k8s-ai-chat/chat` | HTTP 200 |
+| n8n Reset webhook | `POST localhost:30000/webhook/k8s-reset` | HTTP 200 |
+| Postgres | `psql -h localhost -p 30004` | Connection OK |
+| pgAdmin | `curl localhost:30003` | HTTP 200 |
+
+Includes auto-remediation hints for each failure mode.
+
+#### `/start-services` — Deploy & Verify
+
+Applies manifests in dependency order:
+1. Namespace → PVs → Kafka → Qdrant → k8s-watcher → n8n
+2. Waits 30s for initialization
+3. Verifies each service endpoint
+4. Creates Qdrant collection if missing
+5. Checks Ollama models (pulls if missing, builds qwen3:14b-k8s if needed)
+6. Verifies workflow webhooks
+7. Triggers initial Qdrant sync if empty
+
+#### `/reimport-workflows` — Workflow Import
+
+Handles the full workflow reimport lifecycle:
+1. Scales n8n to 0 replicas (sqlite safety)
+2. Deletes existing workflow rows by static ID
+3. Scales n8n back to 1
+4. Copies 4 JSON files into the n8n pod
+5. Imports via `n8n import:workflow`
+6. Publishes (activates) via `n8n publish:workflow`
+7. Restarts n8n for webhook registration
+8. Verifies webhooks return HTTP 200
+
+**Static workflow IDs:**
+- CDC: `k8sCDCflow00001`
+- AI Agent: `k8sAIflow000001`
+- Reset: `k8sRSTflow00001`
+- Memory Clear: `k8sMEMclear001`
+
+> **Tip:** For most cases, `./scripts/setup.sh --keep-cluster --no-test` is simpler — it handles everything automatically.
+
+#### `/reset-db` — Qdrant Reset
+
+1. Records current point count (before)
+2. Calls `POST /webhook/k8s-reset` which:
+   - Deletes the `k8s` collection
+   - Recreates it (768-dim Cosine)
+   - Triggers k8s-watcher `/resync` (async)
+3. Polls Qdrant every 5s until ≥ 25 points
+4. Reports before/after counts
+
+**Important:** After reset, Qdrant is empty for ~30–45 seconds while k8s-watcher republishes all resources. Do not run tests until repopulation is complete.
+
+#### `/test` — E2E Test Suite
+
+Runs all 15 Playwright API-mode tests with prerequisite verification:
+
+**Prerequisites checked:**
+- All 6 pods Running
+- Qdrant has ≥ 10 points
+- Ollama has nomic-embed-text + qwen3:14b-k8s
+- kind cluster reachable
+
+**Test categories:**
+| Tests | Category | Dependencies |
+|-------|----------|-------------|
+| 1–4 | CDC simulation (direct Qdrant upsert) | Qdrant only |
+| 6–7 | Additional CDC tests | Qdrant only |
+| 8–10 | Multi-tool AI Agent pipeline | n8n AI webhook + Ollama + Qdrant |
+| 13–15 | Accuracy (AI vs kubectl comparison) | n8n AI webhook + Ollama + kubectl |
+| 5 | Reset (declared last in spec) | n8n Reset webhook |
+
+**Single test:** `npm run test:single "test name"`
+
+#### `/screenshots` — UI Capture
+
+Captures all UI screenshots using Playwright:
+1. Verifies n8n health and all 6 pods
+2. Runs `npm run screenshots`
+3. Saves to `docs/screenshots/`
+4. Lists captured files and flags missing ones
+
+Expected output: 15 PNG files covering sign-in, dashboard, workflow canvases, executions, chat interface, and settings.
+
+### Adding New Skills
+
+Create a new `.md` file in `.claude/commands/`:
+```bash
+# Example: .claude/commands/my-skill.md
+echo "Description of what the skill does and step-by-step instructions..." > .claude/commands/my-skill.md
+```
+
+The skill becomes available as `/my-skill` in Claude Code immediately. Skills are markdown files containing instructions that Claude Code follows when the command is invoked.
 
 ---
 

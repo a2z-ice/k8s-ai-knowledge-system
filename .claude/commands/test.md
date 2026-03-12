@@ -14,11 +14,12 @@ kubectl --context kind-k8s-ai apply -f infra/k8s/
 
 **Step 2 — Verify prerequisites:**
 ```bash
-# Qdrant: must have ≥ 10 points before AI test will pass
+# Qdrant: must have ≥ 10 points before AI tests will pass
 curl -s http://localhost:30001/collections/k8s | python3 -c "import sys,json; d=json.load(sys.stdin); print('Qdrant:', d['result']['points_count'], 'points,', d['result']['status'])"
 
 # Ollama: both models must be present
 curl -s http://localhost:11434/api/tags | python3 -c "import sys,json; models=[m['name'] for m in json.load(sys.stdin)['models']]; print('Ollama:', models)"
+# Required: nomic-embed-text and qwen3:14b-k8s
 
 # kind cluster must be reachable
 kubectl --context kind-k8s-ai get nodes --no-headers
@@ -31,11 +32,18 @@ curl -s -X POST http://localhost:30000/webhook/k8s-reset -H 'Content-Type: appli
 curl -s http://localhost:30001/collections/k8s | python3 -c "import sys,json; d=json.load(sys.stdin); print('points:', d['result']['points_count'])"
 ```
 
-**Step 3 — Run all 5 tests:**
+**Step 3 — Run all 15 tests:**
 ```bash
 npm test
 ```
-Expected: `5 passed` in under 120 s.
+Expected: `15 passed` in under 180 s.
+
+**Test categories:**
+- **Tests 1–4**: CDC simulation (embed + upsert directly to Qdrant — no n8n dependency)
+- **Tests 6–7**: Additional CDC tests
+- **Test 5 (Reset)**: Declared last in spec file — requires n8n reset webhook
+- **Tests 8–10**: Full multi-tool AI Agent pipeline via live n8n webhook (`/webhook/k8s-ai-chat/chat`)
+- **Tests 13–15**: Accuracy tests comparing AI chat output against real `kubectl` results (pods, deployments, namespaces)
 
 **Step 4 — If any test fails, diagnose:**
 
@@ -46,8 +54,10 @@ Expected: `5 passed` in under 120 s.
   kubectl --context kind-k8s-ai -n k8s-ai exec ${KAFKA_POD} -- kafka-get-offsets --bootstrap-server localhost:9092 --topic k8s-resources
   ```
 - **Test 3 (CDC delete)** → check Qdrant API reachable: `curl -s http://localhost:30001/healthz`
-- **Test 4 (AI query)** → check Ollama is responding and Qdrant has ≥ 10 points
+- **Tests 8–10 (AI Agent)** → check Ollama is responding and Qdrant has ≥ 10 points; verify AI webhook returns 200:
+  `curl -s -o /dev/null -w "%{http_code}" http://localhost:30000/webhook/k8s-ai-chat/chat`
 - **Test 5 (Reset)** → check reset webhook returns 200; if 404, run `/reimport-workflows`; check n8n logs: `kubectl -n k8s-ai logs deployment/n8n --tail 50`
+- **Tests 13–15 (Accuracy)** → require AI_K8s_Flow active + Qdrant populated + Ollama qwen3:14b-k8s available
 
 **Step 5 — Run a single test by name:**
 ```bash
