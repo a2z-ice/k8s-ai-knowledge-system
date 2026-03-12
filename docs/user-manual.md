@@ -59,13 +59,106 @@ A complete visual guide to setting up, operating, testing, and utilizing the Kub
 | **pgAdmin** | `admin@example.com` | `admin` |
 | **Postgres** | `n8n` | `n8n_memory` |
 
-### Domain-Based Access (Optional)
+### Domain-Based Access & Remote Machine Setup
 
-Add to `/etc/hosts`:
+The n8n deployment is pre-configured with `WEBHOOK_URL=http://n8n.genai.prod:30000/` and `N8N_HOST=n8n.genai.prod` (see `infra/k8s/n8n/n8n-deployment.yaml`). This means **webhook callbacks and the n8n editor UI resolve to `n8n.genai.prod`**, not `localhost`. For this to work — both on the host machine and on any remote machine — you must configure `/etc/hosts`.
+
+#### On the Host Machine (where kind cluster runs)
+
+Edit `/etc/hosts` (requires `sudo`):
+```bash
+sudo nano /etc/hosts
+# or
+sudo vi /etc/hosts
+```
+
+Add this line (use the host machine's LAN IP — `192.168.1.154` in this project):
 ```
 192.168.1.154 n8n.genai.prod
 ```
-Then access n8n at: http://n8n.genai.prod:30000
+
+After saving, verify:
+```bash
+ping -c 1 n8n.genai.prod
+# should resolve to 192.168.1.154
+```
+
+Now you can access all services using the domain:
+
+| Service | Domain URL |
+|---------|-----------|
+| **n8n Dashboard** | http://n8n.genai.prod:30000 |
+| **AI Chat** (public) | http://n8n.genai.prod:30000/webhook/k8s-ai-chat/chat |
+| **Qdrant** | http://n8n.genai.prod:30001/dashboard |
+| **pgAdmin** | http://n8n.genai.prod:30003 |
+| **k8s-watcher** | http://n8n.genai.prod:30002/healthz |
+
+#### On a Remote Machine (accessing over the LAN)
+
+Any machine on the same network can access the system. On the remote machine:
+
+1. **Add the `/etc/hosts` entry** (same as above):
+   ```bash
+   # Linux / macOS:
+   sudo sh -c 'echo "192.168.1.154 n8n.genai.prod" >> /etc/hosts'
+
+   # Windows (run PowerShell as Administrator):
+   Add-Content -Path C:\Windows\System32\drivers\etc\hosts -Value "192.168.1.154 n8n.genai.prod"
+   ```
+
+2. **Verify connectivity** — the host machine's firewall must allow inbound connections on ports 30000–30004:
+   ```bash
+   # From the remote machine:
+   curl -s http://n8n.genai.prod:30000/healthz
+   # Expected: {"status":"ok"}
+
+   # Test AI chat:
+   curl -X POST http://n8n.genai.prod:30000/webhook/k8s-ai-chat/chat \
+     -H 'Content-Type: application/json' \
+     -d '{"chatInput": "How many pods are running?"}'
+   ```
+
+3. **macOS firewall note:** If the remote machine can't connect, check System Settings → Network → Firewall. Either disable the firewall or add exceptions for ports 30000–30004. Docker Desktop's port forwarding binds to `0.0.0.0` by default, so the ports are exposed on all interfaces.
+
+#### Why Domain-Based Access Matters
+
+The n8n deployment configures three environment variables that reference `n8n.genai.prod`:
+
+| Env Variable | Value | Purpose |
+|-------------|-------|---------|
+| `WEBHOOK_URL` | `http://n8n.genai.prod:30000/` | Base URL for all webhook callbacks (AI chat, Reset) |
+| `N8N_HOST` | `n8n.genai.prod` | Hostname used in n8n's internal URL generation |
+| `N8N_EDITOR_BASE_URL` | `http://n8n.genai.prod:30000/` | URL shown in the browser address bar |
+
+Without the `/etc/hosts` entry:
+- The n8n editor UI loads but internal links may fail to resolve
+- Webhook URLs returned by n8n will contain `n8n.genai.prod` which won't resolve
+- The AI chat public URL won't work from other machines
+
+> **Customizing the IP:** If your host machine has a different LAN IP (e.g., `10.0.0.50`), update both `/etc/hosts` **and** the `hostAliases` section in `infra/k8s/n8n/n8n-deployment.yaml` (line 17: `ip: "192.168.1.154"` → your IP). The `hostAliases` entry is how pods inside kind resolve `host.docker.internal` to reach Ollama on the host.
+
+#### Changing the Domain Name
+
+If you want to use a different domain (e.g., `k8s-ai.local`):
+
+1. Update `infra/k8s/n8n/n8n-deployment.yaml`:
+   ```yaml
+   - name: WEBHOOK_URL
+     value: "http://k8s-ai.local:30000/"
+   - name: N8N_HOST
+     value: "k8s-ai.local"
+   - name: N8N_EDITOR_BASE_URL
+     value: "http://k8s-ai.local:30000/"
+   ```
+2. Update `/etc/hosts` on all machines:
+   ```
+   192.168.1.154 k8s-ai.local
+   ```
+3. Redeploy n8n:
+   ```bash
+   kubectl --context kind-k8s-ai apply -f infra/k8s/n8n/
+   kubectl --context kind-k8s-ai -n k8s-ai rollout restart deployment/n8n
+   ```
 
 ### NodePort Assignments
 

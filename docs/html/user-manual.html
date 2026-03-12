@@ -210,6 +210,59 @@
   </table>
 </div>
 
+<div class="cred-box" style="border-left-color:#e74c3c;">
+  <h4>Network Access: /etc/hosts &amp; Remote Machines</h4>
+  <p>The n8n deployment is pre-configured with <code>WEBHOOK_URL=http://n8n.genai.prod:30000/</code> and <code>N8N_HOST=n8n.genai.prod</code>. For webhooks, the editor UI, and remote access to work, you <strong>must</strong> configure <code>/etc/hosts</code> on every machine that accesses the system.</p>
+
+  <h5>Step 1: Configure /etc/hosts (Required)</h5>
+  <p>On <strong>every machine</strong> (host + remote), add this line:</p>
+  <pre><code># Linux / macOS:
+sudo sh -c 'echo "192.168.1.154 n8n.genai.prod" >> /etc/hosts'
+
+# Windows (PowerShell as Administrator):
+Add-Content -Path C:\Windows\System32\drivers\etc\hosts -Value "192.168.1.154 n8n.genai.prod"</code></pre>
+  <p>Verify: <code>ping -c 1 n8n.genai.prod</code> &rarr; should resolve to <code>192.168.1.154</code></p>
+
+  <h5>Step 2: Domain URLs (after /etc/hosts)</h5>
+  <table>
+    <tr><th>Service</th><th>Domain URL</th></tr>
+    <tr><td>n8n Dashboard</td><td><a href="http://n8n.genai.prod:30000">http://n8n.genai.prod:30000</a></td></tr>
+    <tr><td>AI Chat (public)</td><td><a href="http://n8n.genai.prod:30000/webhook/k8s-ai-chat/chat">http://n8n.genai.prod:30000/webhook/k8s-ai-chat/chat</a></td></tr>
+    <tr><td>Qdrant Dashboard</td><td><a href="http://n8n.genai.prod:30001/dashboard">http://n8n.genai.prod:30001/dashboard</a></td></tr>
+    <tr><td>pgAdmin</td><td><a href="http://n8n.genai.prod:30003">http://n8n.genai.prod:30003</a></td></tr>
+    <tr><td>k8s-watcher Health</td><td><a href="http://n8n.genai.prod:30002/healthz">http://n8n.genai.prod:30002/healthz</a></td></tr>
+  </table>
+
+  <h5>Step 3: Remote Machine Access</h5>
+  <p>Any machine on the same LAN can access the system after adding the <code>/etc/hosts</code> entry. Verify from the remote machine:</p>
+  <pre><code># Health check:
+curl -s http://n8n.genai.prod:30000/healthz
+
+# AI chat query:
+curl -X POST http://n8n.genai.prod:30000/webhook/k8s-ai-chat/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"chatInput": "How many pods are running?"}'</code></pre>
+  <p><strong>macOS firewall:</strong> If remote connections fail, check System Settings &rarr; Network &rarr; Firewall. Docker Desktop binds to <code>0.0.0.0</code> by default, but the firewall may block inbound connections on ports 30000&ndash;30004.</p>
+
+  <h5>Why This Matters: n8n Environment Variables</h5>
+  <table>
+    <tr><th>Env Variable</th><th>Value</th><th>Purpose</th></tr>
+    <tr><td><code>WEBHOOK_URL</code></td><td><code>http://n8n.genai.prod:30000/</code></td><td>Base URL for all webhook callbacks</td></tr>
+    <tr><td><code>N8N_HOST</code></td><td><code>n8n.genai.prod</code></td><td>Hostname in n8n's internal URL generation</td></tr>
+    <tr><td><code>N8N_EDITOR_BASE_URL</code></td><td><code>http://n8n.genai.prod:30000/</code></td><td>Browser address bar URL for the editor</td></tr>
+  </table>
+  <p>Without <code>/etc/hosts</code>: webhook URLs won't resolve, the editor UI may break, and remote machines can't reach the AI chat.</p>
+
+  <h5>Customizing the IP or Domain</h5>
+  <p>If your host has a different LAN IP (e.g., <code>10.0.0.50</code>), update:</p>
+  <ol>
+    <li><code>/etc/hosts</code> on all machines: <code>10.0.0.50 n8n.genai.prod</code></li>
+    <li><code>infra/k8s/n8n/n8n-deployment.yaml</code> line 17: <code>ip: "10.0.0.50"</code> (the <code>hostAliases</code> entry for Ollama)</li>
+    <li>Redeploy: <code>kubectl apply -f infra/k8s/n8n/ &amp;&amp; kubectl -n k8s-ai rollout restart deployment/n8n</code></li>
+  </ol>
+  <p>To use a different domain (e.g., <code>k8s-ai.local</code>), also update <code>WEBHOOK_URL</code>, <code>N8N_HOST</code>, and <code>N8N_EDITOR_BASE_URL</code> in the deployment YAML.</p>
+</div>
+
 <div class="cred-box">
   <h4>NodePort Assignments</h4>
   <table>
