@@ -595,7 +595,9 @@ test('AI Agent webhook: secrets query → names returned, values never exposed',
     'What secrets exist in the kube-system namespace? List their names, types, and namespace.',
   );
 
-  expect(answer.toLowerCase()).toMatch(/secret/);
+  // The AI may return a concise table without the literal word "secret" —
+  // accept the bootstrap token type as proof that secret metadata was returned
+  expect(answer.toLowerCase()).toMatch(/secret|bootstrap\.kubernetes\.io/);
   // The response must mention either the namespace or the secret name (bootstrap-token)
   expect(answer.toLowerCase(), 'response must reference kube-system or the known secret name')
     .toMatch(/kube-system|bootstrap/);

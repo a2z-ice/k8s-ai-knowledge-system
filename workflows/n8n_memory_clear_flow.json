@@ -30,11 +30,11 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "DELETE FROM n8n_chat_histories;",
+        "query": "SELECT COUNT(*) as row_count FROM n8n_chat_histories;",
         "options": {}
       },
-      "id": "clear-memory",
-      "name": "Clear Memory",
+      "id": "count-memory",
+      "name": "Count Memory Rows",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.4,
       "position": [420, 380],
@@ -43,7 +43,36 @@
           "id": "postgres-local",
           "name": "Postgres Local"
         }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "DELETE FROM n8n_chat_histories;",
+        "options": {}
+      },
+      "id": "clear-memory",
+      "name": "Clear Memory",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [640, 380],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-local",
+          "name": "Postgres Local"
+        }
       }
+    },
+    {
+      "parameters": {
+        "jsCode": "const ts = new Date().toISOString();\nconst countResult = $('Count Memory Rows').first().json;\nconst rowsDeleted = parseInt(countResult?.row_count || '0', 10);\nconsole.log(`MEMORY_CLEAR: Deleted ${rowsDeleted} rows at ${ts}`);\nreturn [{ json: { status: 'ok', rows_deleted: rowsDeleted, cleared_at: ts } }];"
+      },
+      "id": "format-response",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 380]
     }
   ],
   "connections": {
@@ -51,7 +80,7 @@
       "main": [
         [
           {
-            "node": "Clear Memory",
+            "node": "Count Memory Rows",
             "type": "main",
             "index": 0
           }
@@ -62,7 +91,29 @@
       "main": [
         [
           {
+            "node": "Count Memory Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Count Memory Rows": {
+      "main": [
+        [
+          {
             "node": "Clear Memory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear Memory": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
             "type": "main",
             "index": 0
           }
